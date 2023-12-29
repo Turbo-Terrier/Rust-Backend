@@ -77,7 +77,7 @@ impl DatabasePool {
             section             smallint(8)  null,
             register_timestamp  bigint       null,
             primary key (session_id, semester_key, college, dept, course, section),
-            foreign key (session_id) references application_launch_tracker (session_id)
+            foreign key (session_id) references application_launch_session (session_id)
         );
         "#).await
     }
@@ -97,7 +97,7 @@ impl DatabasePool {
             num_registered       tinyint      not null,
             terminate_timestamp  bigint       not null,
             primary key (session_id),
-            foreign key (session_id) references users (session_id)
+            foreign key (session_id) references application_launch_session (session_id)
         );
         "#).await
     }

@@ -3,12 +3,14 @@ mod database;
 
 use database::DatabasePool;
 use std::fs::File;
-use std::io::Read;
-use std::time::Duration;
+use std::io::{Read, Write};
 use yaml_rust::{YamlLoader, YamlEmitter, Yaml, ScanError};
 use actix_web::{get, web, App, HttpServer, Responder};
 use sqlx::{Database, Executor};
-pub use sqlx::mysql::MySqlPoolOptions;
+use ring::{signature::{self, KeyPair}, };
+use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
+use untrusted::{self, Input};
+use rand;
 
 #[get("/hello/{name}")]
 async fn greet(name: web::Path<String>) -> impl Responder {
@@ -41,6 +43,18 @@ async fn main() -> std::io::Result<()> {
     let database: DatabasePool = DatabasePool::new(host, port, user, pass, database).await;
     database.create_tables().await;
 
+    println!("Loading encryption keys");
+
+    let priv_key_path = &config["ed25519-private-key"].as_str()
+        .expect("ed25519-private-key not found!");
+    let mut priv_key: Vec<u8> = Vec::new();
+    File::open(priv_key_path)
+        .expect(&*format!("Could not open private-key file at {}", priv_key_path))
+        .read_to_end(&mut priv_key)
+        .expect("Error reading private-key!");
+
+    let priv_key: Ed25519KeyPair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(priv_key.as_slice())
+        .expect("Error loading the ed25519 private key from bytes!");
 
     println!("Starting HTTP server...");
     HttpServer::new(|| {
@@ -49,4 +63,5 @@ async fn main() -> std::io::Result<()> {
         .bind(("0.0.0.0", 8080))?
         .run()
         .await
+
 }
