@@ -1,35 +1,55 @@
 use serde::{Deserialize, Serialize};
 use sqlx::Decode;
-use strum_macros::EnumString;
 
 #[derive(Debug)]
 #[derive(Deserialize)]
 #[derive(Serialize)]
-pub struct SignedApplicationStartPermission {
+pub struct ApplicationStartPermission {
     kerberos_username: String,
     membership_level: GrantLevel,
     session_id: i64,
     response_timestamp: i64,
-    signature: String
 }
 
 #[derive(Debug)]
 #[derive(Deserialize)]
 #[derive(Serialize)]
-pub struct SignedResponse {
+pub struct SignedApplicationStartPermission {
+    pub data: ApplicationStartPermission,
+    pub signature: String
+}
+
+impl SignableData for ApplicationStartPermission {
+    fn string_to_sign(&self) -> String {
+        format!("{},{},{},{}", self.kerberos_username, self.membership_level.to_string(), self.session_id, self.response_timestamp)
+    }
+}
+
+#[derive(Debug)]
+#[derive(Deserialize)]
+#[derive(Serialize)]
+pub struct StatusResponse {
     kerberos_username: String,
     status: ResponseStatus,
     reason: String,
-    response_timestamp: i64,
-    signature: String
+    response_timestamp: i64
+}
+
+pub struct SignedStatusResponse {
+    pub data: StatusResponse,
+    pub signature: String
+}
+
+impl SignableData for StatusResponse {
+    fn string_to_sign(&self) -> String {
+        format!("{},{},{},{}", self.kerberos_username, self.status.to_string(), self.reason, self.response_timestamp)
+    }
 }
 
 #[derive(Debug)]
 #[derive(Deserialize)]
 #[derive(Serialize)]
 #[derive(Decode)]
-#[derive(EnumString)]
-#[strum(serialize_all = "snake_case")]
 pub enum GrantLevel {
     Full,
     Demo,
@@ -52,7 +72,6 @@ impl GrantLevel {
 
 #[derive(Debug)]
 #[derive(Deserialize)]
-#[derive(EnumString)]
 #[derive(Serialize)]
 pub enum ResponseStatus {
     Good,
@@ -60,33 +79,34 @@ pub enum ResponseStatus {
     Error,
 }
 
-impl SignedApplicationStartPermission {
-    pub fn new(kerberos_username: String, membership_level: GrantLevel, session_id: i64, response_timestamp: i64, signature: String) -> Self {
-        Self { kerberos_username, membership_level, session_id, response_timestamp, signature }
+impl ResponseStatus {
+    pub fn to_string(&self) -> String {
+        Self::as_str(self).to_string()
+    }
+    pub fn as_str(&self) -> &str {  //todo: this is kinda redundant, is there a better way?
+        match self {
+            ResponseStatus::Good => "Good",
+            ResponseStatus::Warning => "Warning",
+            ResponseStatus::Error => "Error"
+        }
+    }
+
+}
+
+impl ApplicationStartPermission {
+    pub fn new(kerberos_username: String, membership_level: GrantLevel, session_id: i64, response_timestamp: i64) -> Self {
+        Self { kerberos_username, membership_level, session_id, response_timestamp }
     }
 }
 
-impl SignedResponse {
-    pub fn new(kerberos_username: String, status: ResponseStatus, reason: String, response_timestamp: i64, signature: String) -> Self {
-        Self { kerberos_username, status, reason, response_timestamp, signature }
+impl StatusResponse {
+    pub fn new(kerberos_username: String, reason: String, response_timestamp: i64) -> Self {
+        Self { kerberos_username, status: ResponseStatus::Good, reason, response_timestamp }
     }
-    pub fn is_valid() -> bool {
-        true
-    }
-    pub fn kerberos_username(&self) -> &String {
-        &self.kerberos_username
-    }
-    pub fn status(&self) -> &ResponseStatus {
-        &self.status
-    }
-    pub fn reason(&self) -> &String {
-        &self.reason
-    }
-    pub fn response_timestamp(&self) -> i64 {
-        self.response_timestamp
-    }
-    pub fn signature(&self) -> &String {
-        &self.signature
-    }
+}
 
+
+pub trait SignableData {
+    /** This is the string the client side will check to make sure was signed by the server */
+    fn string_to_sign(&self) -> String;
 }

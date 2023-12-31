@@ -2,14 +2,22 @@ use std::fmt::Debug;
 use std::time::Duration;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
-use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, BUCourse};
+use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta};
 use crate::data_structs::signed_response::GrantLevel;
 
-pub(crate) struct DatabasePool {
+#[derive(Debug)]
+pub struct DatabasePool {
     pool: Pool<MySql>,
     connection_url: String
 }
 impl DatabasePool {
+
+    pub fn clone(&self) -> DatabasePool {
+        DatabasePool {
+            pool: self.pool.clone(),
+            connection_url: self.connection_url.clone()
+        }
+    }
 
     pub async fn new(host: &str, port: i16, user: &str, pass: &str, database: &str) -> Self {
         let connection_url = format!("mysql://{user}:{pass}@{host}:{port}/{database}");
@@ -113,7 +121,13 @@ impl DatabasePool {
         if !Self::is_session_alive(&self, session_data.session_id).await {
             return Err("Session not found or is no longer alive")
         }
+        // update the session to inactive
+        sqlx::query("UPDATE application_launch_session SET is_active=0 WHERE session_id=?")
+            .bind(&session_data.session_id)
+            .execute(&self.pool).await
+            .expect("Error executing the end_session query");
 
+        // write the session terminate data to the database
         sqlx::query(r#"
                 INSERT INTO application_terminate_session
                 (session_id, did_finish, unknown_crash, reason,
@@ -157,21 +171,18 @@ impl DatabasePool {
 
         let session_id = result.last_insert_id() as i64;
 
-        // Also write the target courses to the DB (batched)
-        let mut batch = sqlx::query(
-            r#"INSERT INTO session_courses
-                (session_id, semester_key, college, dept, course, section)
-                VALUES (?, ?, ?, ?, ?, ?)"#);
+        // write the courses to the database as well
         for course in &session_data.target_courses {
-            batch = batch.bind(&session_id)
+            sqlx::query("INSERT INTO session_courses (session_id, semester_key, college, dept, course, section) VALUES (?, ?, ?, ?, ?, ?)")
+                .bind(&session_id)
                 .bind(&course.semester_key)
                 .bind(&course.college)
                 .bind(&course.department)
                 .bind(&course.course)
-                .bind(&course.section);
+                .bind(&course.section)
+                .execute(&self.pool).await
+                .expect("Error executing the create_session query");
         }
-        batch.execute(&self.pool).await
-            .expect("Error executing the create_session query");
 
         return session_id;
     }
@@ -193,6 +204,26 @@ impl DatabasePool {
             false
         } else {
             true
+        }
+    }
+
+    pub async fn has_active_session(&self, kerberos_username: &str) -> Option<DeviceMeta> {
+        let result = sqlx::query("SELECT * from application_launch_session WHERE kerberos_username=? AND is_active=1")
+            .bind(kerberos_username)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the session_ping query");
+
+        return if result.is_empty() {
+            None
+        } else {
+            let row = result.get(0).unwrap();
+            Option::from(DeviceMeta {
+                ip: row.get_unchecked::<String, &str>("device_ip"),
+                os: row.get_unchecked::<String, &str>("device_os"),
+                system_arch: row.get_unchecked::<String, &str>("system_arch"),
+                core_count: row.get_unchecked::<i16, &str>("device_cores"),
+                cpu_speed: row.get_unchecked::<f32, &str>("device_clock_speed")
+            })
         }
     }
 
@@ -228,7 +259,7 @@ impl DatabasePool {
         (
             session_id         int auto_increment,
             kerberos_username  varchar(64)                       not null,
-            device_ip          int                               not null,
+            device_ip          varchar(16)                               not null,
             device_os          varchar(32)                       null,
             system_arch        varchar(12)                       null,
             device_cores       smallint                          null,
@@ -247,12 +278,12 @@ impl DatabasePool {
         self.pool.execute(r#"
         create table if not exists session_courses
         (
-            session_id          int          auto_increment,
+            session_id          int          not null,
             semester_key        varchar(12)  not null,
-            college             varchar(8)   not null,
-            dept                varchar(8)   not null,
-            course              tinyint      not null,
-            section             varchar(8)   not null,
+            college             varchar(6)   not null,
+            dept                varchar(6)   not null,
+            course              smallint     not null,
+            section             varchar(6)   not null,
             register_timestamp  bigint       null,
             primary key (session_id, semester_key, college, dept, course, section),
             foreign key (session_id) references application_launch_session (session_id)

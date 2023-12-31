@@ -1,6 +1,6 @@
 pub mod database;
 pub mod api;
-pub mod utils;
+mod encrypted_signing;
 
 pub mod data_structs {
     pub mod app_start_request;
@@ -8,28 +8,47 @@ pub mod data_structs {
 }
 
 
+use std::fs::File;
 use database::DatabasePool;
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 use yaml_rust::YamlLoader;
 use actix_web::{App, HttpServer, Responder, web};
 use actix_web::middleware::Logger;
 use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
-use ring::signature::Ed25519KeyPair;
 use untrusted::{self};
 use rand;
 use serde::Deserialize;
+use crate::encrypted_signing::Ed25519SecretKey;
 
+#[derive(Debug)]
 pub struct SharedResources {
-    priv_key: Ed25519KeyPair,
+    priv_key: Ed25519SecretKey,
     database: DatabasePool
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+impl Clone for SharedResources {
+    fn clone(&self) -> Self {
+        return SharedResources {
+            priv_key: self.priv_key.clone(),
+            database: self.database.clone()
+        }
+    }
+}
+
+pub fn read_file_as_str(file_path: &str) -> String {
+    let mut buf: String = String::new();
+    let mut file = File::open(file_path)
+        .expect("Error! A config.yml file was not found in the current directory.");
+    file.read_to_string(&mut buf).expect("Error reading config.yml!");
+    return buf;
+}
+
+async fn load() -> Result<SharedResources, std::io::Error> {
     println!("Loading configurations...");
 
-    let mut buf: String = utils::read_file_as_str("config.yml");
+    let mut buf: String = read_file_as_str("config.yml");
     let config = match YamlLoader::load_from_str(&mut buf) {
         Ok(config) => config,
         Err(err) => panic!("Error loading yml file")
@@ -51,23 +70,35 @@ async fn main() -> std::io::Result<()> {
 
     let private_key_path = config["ed25519-private-key"].as_str()
         .expect("ed25519-private-key not found!");
-    let private_key = utils::load_priv_key(private_key_path);
+    let private_key = Ed25519SecretKey::new(private_key_path);
 
     let shared_resources = SharedResources {
         priv_key: private_key, database
     };
 
+    return Ok(shared_resources);
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     println!("Starting HTTP server...");
-    HttpServer::new(move || {
+    let shared_resources = match load().await {
+        Ok(shared_resources) => shared_resources,
+        Err(err) => panic!("ERR")
+    };
+
+    HttpServer::new( move || {
         App::new()
-            .app_data(web::Data::new(shared_resources))
+            .app_data(web::Data::new(shared_resources.clone()))
             .wrap(Logger::default())
-            .service(api::app_start)
-            .service(api::app_stop)
-            .service(api::send_mail)
-            .service(api::course_registered)
-            .service(api::ping)
-            .service(api::debug_ping)
+            .service(web::scope("/api/v1",)
+                .service(api::app_start)
+                .service(api::app_stop)
+                .service(api::send_mail)
+                .service(api::course_registered)
+                .service(api::ping)
+                .service(api::debug_ping)
+            )
     })
         .bind(("0.0.0.0", 8080))?
         .run()

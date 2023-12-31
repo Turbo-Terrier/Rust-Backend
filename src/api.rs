@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
 use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, EmailSendRequest, RegistrationNotification, SessionPing};
-use crate::data_structs::signed_response::SignedApplicationStartPermission;
-use crate::{SharedResources, utils};
+use crate::data_structs::signed_response::{ApplicationStartPermission, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
+use crate::SharedResources;
 
 #[get("/ping")]
 async fn debug_ping(req_body: String) -> impl Responder {
@@ -28,6 +28,14 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
         return HttpResponse::Unauthorized().json("Unauthorized");
     }
 
+    // check if there is another running session first
+    let active_session = data.database.has_active_session(&start_data.credentials.kerberos_username).await;
+    if active_session.is_some() {
+        let device = active_session.unwrap();
+        let message = format!("You already have an active session running on device {:?}", device);
+        return HttpResponse::BadRequest().json(message);
+    }
+
     let grant = data.database
         .get_user_grant(&start_data.credentials.kerberos_username).await;
 
@@ -37,16 +45,19 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
     to_sign_vec.push(start_data.credentials.kerberos_username.as_str());
     to_sign_vec.push(grant.as_str());
 
-    let response = SignedApplicationStartPermission::new(
+    let response = ApplicationStartPermission::new(
         start_data.credentials.kerberos_username,
         grant,
         session_id,
-        chrono::Local::now().timestamp(),
-        "TODO".to_string()
+        chrono::Local::now().timestamp()
     );
 
-    // todo respond with a json object containing the signed response
-    HttpResponse::Ok().json(response)
+    let signed_str = data.priv_key.sign(&response);
+
+    HttpResponse::Ok().json(SignedApplicationStartPermission {
+        data: response,
+        signature: signed_str
+    })
 }
 
 #[post("/app-stopped")]
@@ -63,9 +74,20 @@ async fn app_stop(data: web::Data<SharedResources>, req: HttpRequest, payload: w
     }
 
     return match data.database.end_session(&stop_data).await {
-        Ok(_) => HttpResponse::Ok().json("OK"),
+        Ok(_) => {
+            let response = StatusResponse::new(
+                stop_data.credentials.kerberos_username,
+                "OK".to_string(),
+                chrono::Local::now().timestamp()
+            );
+            let signed_str = data.priv_key.sign(&response);
+            HttpResponse::Ok().json(SignedStatusResponse {
+                data: response,
+                signature: signed_str
+            })
+        },
         Err(_) => HttpResponse::BadRequest().json("Invalid session id")
-    }; //TODO: return a signed response
+    };
 }
 
 #[post("/ping")]
@@ -82,9 +104,20 @@ async fn ping(data: web::Data<SharedResources>, req: HttpRequest, payload: web::
     }
 
     return match data.database.session_ping(ping_data.session_id).await {
-        Ok(_) => HttpResponse::Ok().json("OK"),
+        Ok(_) => {
+            let response = StatusResponse::new(
+                ping_data.credentials.kerberos_username,
+                "OK".to_string(),
+                chrono::Local::now().timestamp()
+            );
+            let signed_str = data.priv_key.sign(&response);
+            HttpResponse::Ok().json(SignedStatusResponse {
+                data: response,
+                signature: signed_str
+            })
+        },
         Err(_) => HttpResponse::BadRequest().json("Invalid session id")
-    }; //TODO: return a signed response
+    };
 }
 
 #[post("/course-registered")]
@@ -104,9 +137,20 @@ async fn course_registered(data: web::Data<SharedResources>, req: HttpRequest, p
         reg_notif_data.session_id,
         reg_notif_data.timestamp,
         reg_notif_data.course).await {
-        Ok(_) => HttpResponse::Ok().json("OK"),
+        Ok(_) => {
+            let response = StatusResponse::new(
+                reg_notif_data.credentials.kerberos_username,
+                "OK".to_string(),
+                chrono::Local::now().timestamp()
+            );
+            let signed_str = data.priv_key.sign(&response);
+            HttpResponse::Ok().json(SignedStatusResponse {
+                data: response,
+                signature: signed_str
+            })
+        },
         Err(_) => HttpResponse::BadRequest().json("Invalid session id")
-    }; //TODO: return a signed response
+    };
 }
 
 #[post("/send-mail")]
