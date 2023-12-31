@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::time::Duration;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
-use crate::data_structs::app_start_request::ApplicationStart;
+use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, BUCourse};
 use crate::data_structs::signed_response::GrantLevel;
 
 pub(crate) struct DatabasePool {
@@ -30,6 +30,15 @@ impl DatabasePool {
         Self::create_tables(&self).await;
     }
 
+    pub async fn is_authenticated(&self, kerberos_username: &String, auth_key: &String) -> bool {
+        let result = sqlx::query("SELECT * from users WHERE kerberos_username=? AND authentication_key=?")
+            .bind(&kerberos_username)
+            .bind(&auth_key)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the is_authenticated query");
+        return !result.is_empty();
+    }
+
     pub async fn get_user_grant(&self, kerberos_username: &String) -> GrantLevel {
         let result = sqlx::query("SELECT * from users WHERE kerberos_username=?")
             .bind(&kerberos_username)
@@ -47,7 +56,7 @@ impl DatabasePool {
             let premium_since = row_res.get_unchecked::<Option<i64>, &str>("premium_since");
             if premium_since.is_some() {
                 let premium_expiry = row_res.get_unchecked::<Option<i64>, &str>("premium_expiry").unwrap();
-                let current_time = chrono::Utc::now().timestamp();
+                let current_time = chrono::Local::now().timestamp();
                 if current_time < premium_expiry {
                     return GrantLevel::Full;
                 }
@@ -63,11 +72,69 @@ impl DatabasePool {
 
     }
 
-    pub async fn session_ping(&self, session_id: i64) {
+    pub async fn session_ping(&self, session_id: i64) -> Result<&str, &str> {
+        // first some sanity checks to ensure the session is still active
+        if Self::is_session_alive(&self, session_id).await {
+            return Err("Session not found or is no longer alive")
+        }
+
+        // now update ping
         sqlx::query("UPDATE application_launch_session SET last_ping=current_timestamp WHERE session_id=?")
             .bind(&session_id)
             .execute(&self.pool).await
             .expect("Error executing the session_ping query");
+
+        return Ok("Pong!")
+    }
+
+    // todo make this clearner bc the strings arent actually ever used
+    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course: BUCourse) -> Result<&str, &str> {
+        // sanity check to ensure session is alive
+        if !Self::is_session_alive(&self, session_id).await {
+            return Err("Session not found or is no longer alive")
+        }
+
+        sqlx::query("UPDATE session_courses SET register_timestamp=? WHERE session_id=? AND semester_key=? AND college=? AND dept=? AND course=? AND section=?")
+            .bind(&registration_timestamp)
+            .bind(&session_id)
+            .bind(&course.semester_key)
+            .bind(&course.college)
+            .bind(&course.department)
+            .bind(&course.course)
+            .bind(&course.section)
+            .execute(&self.pool).await
+            .expect("Error executing the mark_course_registered query");
+
+        return Ok("OK")
+    }
+
+    pub async fn end_session(&self, session_data: &ApplicationStopped) -> Result<&str, &str> {
+        // sanity check to ensure session is alive
+        if !Self::is_session_alive(&self, session_data.session_id).await {
+            return Err("Session not found or is no longer alive")
+        }
+
+        sqlx::query(r#"
+                INSERT INTO application_terminate_session
+                (session_id, did_finish, unknown_crash, reason,
+                avg_cycle_time, cycle_time_std, avg_sleep_time,
+                sleep_time_std, num_registered, terminate_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#)
+            .bind(&session_data.session_id)
+            .bind(&session_data.did_finish)
+            .bind(&session_data.unknown_crash_occured)
+            .bind(&session_data.reason)
+            .bind(&session_data.avg_cycle_time)
+            .bind(&session_data.std_cycle_time)
+            .bind(&session_data.avg_sleep_time)
+            .bind(&session_data.std_sleep_time)
+            .bind(&session_data.num_registered)
+            .bind(&session_data.timestamp)
+            .execute(&self.pool).await
+            .expect("Error executing the end_session query");
+
+        return Ok("OK")
     }
 
     pub async fn create_session(&self, session_data: &ApplicationStart, grant_level: &GrantLevel) -> i64 {
@@ -83,11 +150,30 @@ impl DatabasePool {
             .bind(&session_data.device_meta.system_arch)
             .bind(&session_data.device_meta.core_count)
             .bind(&session_data.device_meta.cpu_speed)
-            .bind(&grant_level)
-            .bind(&session_data.response_timestamp)
+            .bind(&grant_level.to_string())
+            .bind(chrono::Local::now().timestamp())
             .execute(&self.pool).await
             .expect("Error executing the create_session query");
-        result.last_insert_id() as i64
+
+        let session_id = result.last_insert_id() as i64;
+
+        // Also write the target courses to the DB (batched)
+        let mut batch = sqlx::query(
+            r#"INSERT INTO session_courses
+                (session_id, semester_key, college, dept, course, section)
+                VALUES (?, ?, ?, ?, ?, ?)"#);
+        for course in &session_data.target_courses {
+            batch = batch.bind(&session_id)
+                .bind(&course.semester_key)
+                .bind(&course.college)
+                .bind(&course.department)
+                .bind(&course.course)
+                .bind(&course.section);
+        }
+        batch.execute(&self.pool).await
+            .expect("Error executing the create_session query");
+
+        return session_id;
     }
 
     async fn create_user(&self, kerberos_username: &String) {
@@ -95,6 +181,19 @@ impl DatabasePool {
             .bind(&kerberos_username)
             .execute(&self.pool).await
             .expect("Error executing the create_user query");
+    }
+
+    pub async fn is_session_alive(&self, session_id: i64) -> bool {
+        let result = sqlx::query("SELECT * from application_launch_session WHERE session_id=? AND is_active=1")
+            .bind(&session_id)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the session_ping query");
+
+        return if result.is_empty() {
+            false
+        } else {
+            true
+        }
     }
 
     async fn create_tables(&self) {
@@ -112,11 +211,13 @@ impl DatabasePool {
         self.pool.execute(r#"
         create table if not exists users (
             kerberos_username      varchar(64)                                   not null,
+            authentication_key     varchar(64)                                   not null,
             has_demo_credit        tinyint(1)  default 1                         not null,
             premium_since          bigint                                        null,
             premium_expiry         bigint                                        null,
             registration_timestamp bigint      default CURRENT_TIMESTAMP         not null,
-            PRIMARY KEY (kerberos_username)
+            PRIMARY KEY (kerberos_username),
+            UNIQUE KEY (authentication_key)
         );
         "#).await
     }

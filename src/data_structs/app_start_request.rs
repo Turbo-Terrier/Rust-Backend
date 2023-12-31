@@ -4,7 +4,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct AppCredentials {
     pub kerberos_username: String,
-    pub license_key: String,
+    pub authentication_key: String,
 }
 
 #[derive(Debug)]
@@ -48,9 +48,17 @@ pub struct EmailSendRequest {
 #[derive(Debug)]
 #[derive(Deserialize)]
 pub struct RegistrationNotification {
+    pub credentials: AppCredentials,
     pub session_id: i64,
     pub course: BUCourse,
-    pub timestamp: u64,
+    pub timestamp: i64,
+}
+
+#[derive(Debug)]
+#[derive(Deserialize)]
+pub struct SessionPing {
+    pub credentials: AppCredentials,
+    pub session_id: i64,
 }
 
 // sent when application starts
@@ -60,13 +68,14 @@ pub struct ApplicationStart {
     pub credentials: AppCredentials,
     pub target_courses: Vec<BUCourse>,
     pub device_meta: DeviceMeta,
-    pub timestamp: u64
+    pub timestamp: i64
 }
 
 // sent when application stops
 #[derive(Debug)]
 #[derive(Deserialize)]
 pub struct ApplicationStopped {
+    pub credentials: AppCredentials,
     pub session_id: i64,
     pub did_finish: bool,
     pub unknown_crash_occured: bool,
@@ -76,5 +85,5 @@ pub struct ApplicationStopped {
     pub avg_sleep_time: f64,
     pub std_sleep_time: f64,
     pub num_registered: u8,
-    pub timestamp: u64,
+    pub timestamp: i64,
 }

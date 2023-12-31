@@ -9,7 +9,6 @@ pub mod data_structs {
 
 
 use database::DatabasePool;
-use std::fs::File;
 use std::io::{Read, Write};
 use yaml_rust::YamlLoader;
 use actix_web::{App, HttpServer, Responder, web};
@@ -59,9 +58,9 @@ async fn main() -> std::io::Result<()> {
     };
 
     println!("Starting HTTP server...");
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
-            .app_data(shared_resources)
+            .app_data(web::Data::new(shared_resources))
             .wrap(Logger::default())
             .service(api::app_start)
             .service(api::app_stop)

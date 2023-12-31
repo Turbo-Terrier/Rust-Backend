@@ -1,9 +1,7 @@
 use std::any::Any;
 use std::fs::File;
 use std::io::Read;
-use ring::signature::Ed25519KeyPair;
-use crate::data_structs::app_start_request::AppCredentials;
-use crate::database::DatabasePool;
+use ring::signature::{Ed25519KeyPair, Signature};
 
 pub fn load_priv_key(priv_key_path: &str) -> Ed25519KeyPair {
     let mut priv_key: Vec<u8> = Vec::new();
@@ -24,10 +22,12 @@ pub fn read_file_as_str(file_path: &str) -> String {
     return buf;
 }
 
-pub fn sign(the_pen: &Ed25519KeyPair, args: Vec<dyn Any>) -> String {
+pub fn sign(the_pen: &Ed25519KeyPair, args: Vec<String>) -> String {
     let mut string_to_sign = String::new();
     for arg in args {
-        string_to_sign.push_str(arg.to_string().as_str());
+        string_to_sign.push_str(arg.as_str());
     }
-    let signature = the_pen.sign(string_to_sign.as_bytes());
+    let signature: Signature = the_pen.sign(string_to_sign.as_bytes());
+    let str_signature = base64::encode(signature.as_ref());
+    return str_signature;
 }
