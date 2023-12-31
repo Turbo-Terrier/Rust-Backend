@@ -168,5 +168,3 @@ async fn send_mail(data: web::Data<SharedResources>, req: HttpRequest, payload: 
 
     HttpResponse::Ok().json("TODO") //todo
 }
-
-

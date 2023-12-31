@@ -35,6 +35,9 @@ pub struct StatusResponse {
     response_timestamp: i64
 }
 
+#[derive(Debug)]
+#[derive(Deserialize)]
+#[derive(Serialize)]
 pub struct SignedStatusResponse {
     pub data: StatusResponse,
     pub signature: String
