@@ -1,4 +1,4 @@
-use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
+use actix_web::{get, HttpResponse, post, Responder, web};
 use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, EmailSendRequest, RegistrationNotification, SessionPing};
 use crate::data_structs::signed_response::{ApplicationStartPermission, GrantLevel, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
 use crate::SharedResources;
@@ -172,5 +172,5 @@ async fn send_mail(data: web::Data<SharedResources>, payload: web::Json<EmailSen
         return HttpResponse::Unauthorized().json("Unauthorized");
     }
 
-    HttpResponse::Ok().json("TODO")
+    HttpResponse::Ok().json("blah")
 }

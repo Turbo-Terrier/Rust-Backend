@@ -1,9 +1,6 @@
-use actix_web::error::JsonPayloadError::ContentType;
-use actix_web::error::ParseError::Header;
 use lettre::{Message, SmtpTransport, Transport};
-use lettre::message::{MaybeString, MultiPart, SinglePart};
+use lettre::message::{MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
-use lettre::transport::smtp::client::Tls;
 use lettre::transport::smtp::PoolConfig;
 use serde::Deserialize;
 
@@ -34,12 +31,12 @@ impl Email {
                     .singlepart(
                         SinglePart::builder()
                             .header(lettre::message::header::ContentType::TEXT_PLAIN)
-                            .body(MaybeString::from(self.mail_body.clone()))
+                            .body(self.mail_body.clone())
                     )
                     .singlepart(
                         SinglePart::builder()
                             .header(lettre::message::header::ContentType::TEXT_HTML)
-                            .body(MaybeString::from(self.mail_body.clone()))
+                            .body(self.mail_body.clone())
                     )
             ).unwrap();
         smtp_transport.send(&email_message).unwrap();
