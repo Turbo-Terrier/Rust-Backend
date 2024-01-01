@@ -4,7 +4,7 @@ use crate::data_structs::signed_response::{ApplicationStartPermission, GrantLeve
 use crate::SharedResources;
 
 #[get("/ping")]
-async fn debug_ping(req_body: String) -> impl Responder {
+async fn debug_ping() -> impl Responder {
     // just to test that the server is running
     "pong!"
 }
@@ -15,7 +15,7 @@ async fn debug_ping(req_body: String) -> impl Responder {
 //  3. if they buy premium that same token becomes premium
 
 #[post("/app-started")]
-pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<ApplicationStart>) -> impl Responder {
+pub async fn app_start(data: web::Data<SharedResources>, payload: web::Json<ApplicationStart>) -> impl Responder {
     let start_data: ApplicationStart = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
@@ -60,7 +60,7 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
 }
 
 #[post("/app-stopped")]
-async fn app_stop(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<ApplicationStopped>) -> impl Responder {
+async fn app_stop(data: web::Data<SharedResources>, payload: web::Json<ApplicationStopped>) -> impl Responder {
     let stop_data: ApplicationStopped = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
@@ -90,7 +90,7 @@ async fn app_stop(data: web::Data<SharedResources>, req: HttpRequest, payload: w
 }
 
 #[post("/ping")]
-async fn ping(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<SessionPing>) -> impl Responder {
+async fn ping(data: web::Data<SharedResources>, payload: web::Json<SessionPing>) -> impl Responder {
     let ping_data: SessionPing = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
@@ -120,7 +120,7 @@ async fn ping(data: web::Data<SharedResources>, req: HttpRequest, payload: web::
 }
 
 #[post("/course-registered")]
-async fn course_registered(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<RegistrationNotification>) -> impl Responder {
+async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<RegistrationNotification>) -> impl Responder {
     let reg_notif_data: RegistrationNotification = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
@@ -160,7 +160,7 @@ async fn course_registered(data: web::Data<SharedResources>, req: HttpRequest, p
 }
 
 #[post("/send-mail")]  //todo: remove?
-async fn send_mail(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<EmailSendRequest>) -> impl Responder {
+async fn send_mail(data: web::Data<SharedResources>, payload: web::Json<EmailSendRequest>) -> impl Responder {
     let email_send_data: EmailSendRequest = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
@@ -172,5 +172,5 @@ async fn send_mail(data: web::Data<SharedResources>, req: HttpRequest, payload: 
         return HttpResponse::Unauthorized().json("Unauthorized");
     }
 
-    HttpResponse::Ok().json("TODO") //todo
+    HttpResponse::Ok().json("TODO")
 }

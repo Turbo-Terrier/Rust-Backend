@@ -21,8 +21,6 @@ use lettre::SmtpTransport;
 use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
 use untrusted::{self};
-use rand;
-use serde::Deserialize;
 use crate::encrypted_signing::Ed25519SecretKey;
 
 pub struct SharedResources {
@@ -55,7 +53,7 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     let mut buf: String = read_file_as_str("config.yml");
     let config = match YamlLoader::load_from_str(&mut buf) {
         Ok(config) => config,
-        Err(err) => panic!("Error loading yml file")
+        Err(_) => panic!("Error loading yml file")
     };
     let config = &config[0];
 

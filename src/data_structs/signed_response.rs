@@ -49,7 +49,7 @@ impl SignableData for StatusResponse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[derive(Deserialize)]
 #[derive(Serialize)]
 #[derive(Decode)]
@@ -73,7 +73,7 @@ impl GrantLevel {
 
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[derive(Deserialize)]
 #[derive(Serialize)]
 pub enum ResponseStatus {

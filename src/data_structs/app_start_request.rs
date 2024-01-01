@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use crate::smtp_mailing_util::Email;
 
+//todo: this whole thing is a mess. I need to clean it up
+// by reorganizing modules
 #[derive(Debug)]
 #[derive(Deserialize)]
 pub struct AppCredentials {
