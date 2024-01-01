@@ -1,7 +1,6 @@
-use std::fmt::Debug;
 use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
 use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, EmailSendRequest, RegistrationNotification, SessionPing};
-use crate::data_structs::signed_response::{ApplicationStartPermission, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
+use crate::data_structs::signed_response::{ApplicationStartPermission, GrantLevel, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
 use crate::SharedResources;
 
 #[get("/ping")]
@@ -52,7 +51,7 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
         chrono::Local::now().timestamp()
     );
 
-    let signed_str = data.priv_key.sign(&response);
+    let signed_str = data.private_key.sign(&response);
 
     HttpResponse::Ok().json(SignedApplicationStartPermission {
         data: response,
@@ -80,7 +79,7 @@ async fn app_stop(data: web::Data<SharedResources>, req: HttpRequest, payload: w
                 "OK".to_string(),
                 chrono::Local::now().timestamp()
             );
-            let signed_str = data.priv_key.sign(&response);
+            let signed_str = data.private_key.sign(&response);
             HttpResponse::Ok().json(SignedStatusResponse {
                 data: response,
                 signature: signed_str
@@ -110,7 +109,7 @@ async fn ping(data: web::Data<SharedResources>, req: HttpRequest, payload: web::
                 "OK".to_string(),
                 chrono::Local::now().timestamp()
             );
-            let signed_str = data.priv_key.sign(&response);
+            let signed_str = data.private_key.sign(&response);
             HttpResponse::Ok().json(SignedStatusResponse {
                 data: response,
                 signature: signed_str
@@ -138,12 +137,19 @@ async fn course_registered(data: web::Data<SharedResources>, req: HttpRequest, p
         reg_notif_data.timestamp,
         reg_notif_data.course).await {
         Ok(_) => {
+            // first if this is a demo user, mark demo over
+            let grant = data.database.get_user_grant(&reg_notif_data.credentials.kerberos_username).await;
+            if grant == GrantLevel::Demo {
+                data.database.mark_demo_over(&reg_notif_data.credentials.kerberos_username).await;
+                // todo: email them about discounted premium
+            }
+
             let response = StatusResponse::new(
                 reg_notif_data.credentials.kerberos_username,
                 "OK".to_string(),
                 chrono::Local::now().timestamp()
             );
-            let signed_str = data.priv_key.sign(&response);
+            let signed_str = data.private_key.sign(&response);
             HttpResponse::Ok().json(SignedStatusResponse {
                 data: response,
                 signature: signed_str
@@ -153,7 +159,7 @@ async fn course_registered(data: web::Data<SharedResources>, req: HttpRequest, p
     };
 }
 
-#[post("/send-mail")]
+#[post("/send-mail")]  //todo: remove?
 async fn send_mail(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<EmailSendRequest>) -> impl Responder {
     let email_send_data: EmailSendRequest = payload.into_inner();
 

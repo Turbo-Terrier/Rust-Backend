@@ -1,18 +1,11 @@
 use serde::Deserialize;
+use crate::smtp_mailing_util::Email;
 
 #[derive(Debug)]
 #[derive(Deserialize)]
 pub struct AppCredentials {
     pub kerberos_username: String,
     pub authentication_key: String,
-}
-
-#[derive(Debug)]
-#[derive(Deserialize)]
-pub struct Email {
-    pub email_heading: String,
-    pub sender_name: String,
-    pub email_body: String,
 }
 
 #[derive(Debug)]

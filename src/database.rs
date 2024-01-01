@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug};
 use std::time::Duration;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
@@ -28,7 +28,7 @@ impl DatabasePool {
             .acquire_timeout(Duration::from_secs(5))
             .connect(&connection_url).await {
                     Ok(res) => res,
-                    Err(err) => panic!("Unable to connect to the database")
+                    Err(_) => panic!("Unable to connect to the database")
                 };
 
         DatabasePool { pool: pool, connection_url}
@@ -53,11 +53,9 @@ impl DatabasePool {
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the get_user_grant query");
 
-        // then this is the first time this user has used
-        // this app so we create an acc for them
         if result.is_empty() {
-            Self::create_user(&self, kerberos_username).await;
-            return GrantLevel::Demo;  // all new users will have the demo grant
+            //Self::create_user(&self, kerberos_username).await;
+            return GrantLevel::None;
         } else {
             let row_res = result.get(0).unwrap();
             // check premium status
@@ -70,14 +68,22 @@ impl DatabasePool {
                 }
             }
             // check demo status
-            let has_demo_credit = row_res.get_unchecked::<bool, &str>("has_demo_credit");
-            return if has_demo_credit {
+            let demo_expired_at = row_res.get_unchecked::<Option<i64>, &str>("demo_expired_at");
+            return if demo_expired_at.is_none() {
                 GrantLevel::Demo
             } else {
                 GrantLevel::None
             }
         }
 
+    }
+
+    pub async fn mark_demo_over(&self, kerberos_username: &String) {
+        sqlx::query("UPDATE users SET demo_expired_at=? WHERE kerberos_username=?")
+            .bind(&chrono::Local::now().timestamp())
+            .bind(&kerberos_username)
+            .execute(&self.pool).await
+            .expect("Error executing the mark_demo_over query");
     }
 
     pub async fn session_ping(&self, session_id: i64) -> Result<&str, &str> {
@@ -132,8 +138,8 @@ impl DatabasePool {
                 INSERT INTO application_terminate_session
                 (session_id, did_finish, unknown_crash, reason,
                 avg_cycle_time, cycle_time_std, avg_sleep_time,
-                sleep_time_std, num_registered, terminate_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                sleep_time_std, terminate_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#)
             .bind(&session_data.session_id)
             .bind(&session_data.did_finish)
@@ -143,7 +149,6 @@ impl DatabasePool {
             .bind(&session_data.std_cycle_time)
             .bind(&session_data.avg_sleep_time)
             .bind(&session_data.std_sleep_time)
-            .bind(&session_data.num_registered)
             .bind(&session_data.timestamp)
             .execute(&self.pool).await
             .expect("Error executing the end_session query");
@@ -192,6 +197,47 @@ impl DatabasePool {
             .bind(&kerberos_username)
             .execute(&self.pool).await
             .expect("Error executing the create_user query");
+    }
+
+    pub async fn cleanup_dead_sessions(&self) {
+
+        let to_update = sqlx::query("SELECT session_id FROM application_launch_session WHERE last_ping < ? AND is_active=1")
+            .bind(chrono::Local::now().timestamp() - 30) // close all sessions where no ping was received for 30sec
+            .fetch_all(&self.pool).await
+            .expect("Error executing the selection cleanup_dead_sessions query");
+
+        for row in &to_update {
+            let session_id = row.get_unchecked::<i64, &str>("session_id");
+            // update the session to inactive
+            sqlx::query("UPDATE application_launch_session SET is_active=0 WHERE session_id=?")
+                .bind(&session_id)
+                .execute(&self.pool).await
+                .expect("Error executing the cleanup_dead_sessions query");
+            // insert a session terminate entry
+            sqlx::query(r#"
+                INSERT INTO application_terminate_session
+                (session_id, did_finish, unknown_crash, reason,
+                avg_cycle_time, cycle_time_std, avg_sleep_time,
+                sleep_time_std, terminate_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#)
+                .bind(&session_id)
+                .bind(&false)
+                .bind(&true)
+                .bind(&"Session timed out".to_string())
+                .bind(None as Option<f32>)
+                .bind(None as Option<f32>)
+                .bind(None as Option<f32>)
+                .bind(None as Option<f32>)
+                .bind(&chrono::Local::now().timestamp())
+                .execute(&self.pool).await
+                .expect("Error executing the cleanup_dead_sessions query");
+        }
+
+        if to_update.len() != 0 {
+            println!("Pruned {} dead sessions", to_update.len());
+        }
+
     }
 
     pub async fn is_session_alive(&self, session_id: i64) -> bool {
@@ -243,7 +289,7 @@ impl DatabasePool {
         create table if not exists users (
             kerberos_username      varchar(64)                                   not null,
             authentication_key     varchar(64)                                   not null,
-            has_demo_credit        tinyint(1)  default 1                         not null,
+            demo_expired_at        bigint                                        null,
             premium_since          bigint                                        null,
             premium_expiry         bigint                                        null,
             registration_timestamp bigint      default CURRENT_TIMESTAMP         not null,
@@ -299,11 +345,10 @@ impl DatabasePool {
             did_finish           tinyint(1)   not null,
             unknown_crash        tinyint(1)   not null,
             reason               varchar(512) not null,
-            avg_cycle_time       float        not null,
-            cycle_time_std       float        not null,
-            avg_sleep_time       float        not null,
-            sleep_time_std       float        not null,
-            num_registered       tinyint      not null,
+            avg_cycle_time       float        null,
+            cycle_time_std       float        null,
+            avg_sleep_time       float        null,
+            sleep_time_std       float        null,
             terminate_timestamp  bigint       not null,
             primary key (session_id),
             foreign key (session_id) references application_launch_session (session_id)
