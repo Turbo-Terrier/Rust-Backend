@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use sqlx::Decode;
 use crate::smtp_mailing_util::Email;
 
 //todo: this whole thing is a mess. I need to clean it up
@@ -17,16 +18,55 @@ pub struct DeviceMeta {
     pub cpu_speed: f32,
     pub system_arch: String,
     pub os: String,
-    pub ip: String,
+    pub ip: Option<String>, // client doesn't send this field, server adds it
+}
+
+#[derive(Debug, PartialEq, Eq)]
+#[derive(Deserialize)]
+#[derive(Decode)]
+pub enum SemesterSeason {
+    Summer1,
+    Summer2,
+    Fall,
+    Spring
+}
+
+impl SemesterSeason {
+    pub fn to_string(&self) -> String {
+        match self {
+            SemesterSeason::Summer1 => "Summer1".to_string(),
+            SemesterSeason::Summer2 => "Summer2".to_string(),
+            SemesterSeason::Fall => "Fall".to_string(),
+            SemesterSeason::Spring => "Spring".to_string(),
+        }
+    }
+
+    pub fn from_string(season: &str) -> SemesterSeason {
+        let lower_season = season.clone().to_lowercase().as_str();
+        match season {
+            "summer1" => SemesterSeason::Summer1,
+            "summer2" => SemesterSeason::Summer2,
+            "fall" => SemesterSeason::Fall,
+            "spring" => SemesterSeason::Spring,
+            _ => panic!("Invalid season string")
+        }
+    }
+}
+
+#[derive(Debug)]
+#[derive(Deserialize)]
+pub struct Semester {
+    pub semester_season: SemesterSeason,
+    pub semester_year: u16,
 }
 
 #[derive(Debug)]
 #[derive(Deserialize)]
 pub struct BUCourse {
-    pub semester_key: String,
+    pub semester: Semester,
     pub college: String,
     pub department: String,
-    pub course: u16,
+    pub course_code: u16,
     pub section: String,
 }
 
@@ -54,6 +94,7 @@ pub struct RegistrationNotification {
 pub struct SessionPing {
     pub credentials: AppCredentials,
     pub session_id: i64,
+    pub timestamp: i64,
 }
 
 // sent when application starts
@@ -73,12 +114,11 @@ pub struct ApplicationStopped {
     pub credentials: AppCredentials,
     pub session_id: i64,
     pub did_finish: bool,
-    pub unknown_crash_occured: bool,
+    pub unknown_crash_occurred: Option<bool>,
     pub reason: String,
-    pub avg_cycle_time: f64,
-    pub std_cycle_time: f64,
-    pub avg_sleep_time: f64,
-    pub std_sleep_time: f64,
-    pub num_registered: u8,
+    pub avg_cycle_time: Option<f64>,
+    pub std_cycle_time: Option<f64>,
+    pub avg_sleep_time: Option<f64>,
+    pub std_sleep_time: Option<f64>,
     pub timestamp: i64,
 }

@@ -3,9 +3,11 @@ use std::io::Read;
 use ring::signature::{Ed25519KeyPair, Signature};
 use crate::data_structs::signed_response::SignableData;
 
+const KEY_SIZE: usize = 48;
+
 #[derive(Debug)]
 pub struct Ed25519SecretKey {
-    key_bytes: [u8; 85],
+    key_bytes: [u8; KEY_SIZE],
     private_key: Ed25519KeyPair,
 }
 
@@ -17,10 +19,10 @@ impl Ed25519SecretKey {
             .read_to_end(&mut priv_key)
             .expect("Error reading private-key!");
 
-        assert_eq!(priv_key.len(), 85, "Private key must be 85 bytes long!");
+        assert_eq!(priv_key.len(), KEY_SIZE, "Private key size incorrect!");
 
         return Ed25519SecretKey {
-            key_bytes: <[u8; 85]>::try_from(priv_key.as_slice()).unwrap(),
+            key_bytes: <[u8; KEY_SIZE]>::try_from(priv_key.as_slice()).unwrap(),
             private_key: Ed25519KeyPair::from_pkcs8_maybe_unchecked(priv_key.as_slice())
             .expect("Error loading the ed25519 private key from bytes!")
         };

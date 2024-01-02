@@ -56,7 +56,8 @@ impl SignableData for StatusResponse {
 pub enum GrantLevel {
     Full,
     Demo,
-    None
+    Expired,
+    Error
 }
 
 impl GrantLevel {
@@ -67,7 +68,8 @@ impl GrantLevel {
         match self {
             GrantLevel::Full => "Full",
             GrantLevel::Demo => "Demo",
-            GrantLevel::None => "None"
+            GrantLevel::Expired => "Expired",
+            GrantLevel::Error => "Error"
         }
     }
 
@@ -77,7 +79,7 @@ impl GrantLevel {
 #[derive(Deserialize)]
 #[derive(Serialize)]
 pub enum ResponseStatus {
-    Good,
+    Success,
     Warning,
     Error,
 }
@@ -88,7 +90,7 @@ impl ResponseStatus {
     }
     pub fn as_str(&self) -> &str {  //todo: this is kinda redundant, is there a better way?
         match self {
-            ResponseStatus::Good => "Good",
+            ResponseStatus::Success => "Success",
             ResponseStatus::Warning => "Warning",
             ResponseStatus::Error => "Error"
         }
@@ -104,7 +106,7 @@ impl ApplicationStartPermission {
 
 impl StatusResponse {
     pub fn new(kerberos_username: String, reason: String, response_timestamp: i64) -> Self {
-        Self { kerberos_username, status: ResponseStatus::Good, reason, response_timestamp }
+        Self { kerberos_username, status: ResponseStatus::Success, reason, response_timestamp }
     }
 }
 

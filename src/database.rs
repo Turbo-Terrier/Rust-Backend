@@ -2,7 +2,7 @@ use std::fmt::{Debug};
 use std::time::Duration;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
-use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta};
+use crate::data_structs::app_start_request::{AppCredentials, ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta, SessionPing};
 use crate::data_structs::signed_response::GrantLevel;
 
 #[derive(Debug)]
@@ -55,7 +55,7 @@ impl DatabasePool {
 
         if result.is_empty() {
             //Self::create_user(&self, kerberos_username).await;
-            return GrantLevel::None;
+            return GrantLevel::Error;
         } else {
             let row_res = result.get(0).unwrap();
             // check premium status
@@ -72,7 +72,7 @@ impl DatabasePool {
             return if demo_expired_at.is_none() {
                 GrantLevel::Demo
             } else {
-                GrantLevel::None
+                GrantLevel::Expired
             }
         }
 
@@ -86,15 +86,17 @@ impl DatabasePool {
             .expect("Error executing the mark_demo_over query");
     }
 
-    pub async fn session_ping(&self, session_id: i64) -> Result<&str, &str> {
+    pub async fn session_ping(&self, session_ping: &SessionPing) -> Result<&str, &str> {
+
         // first some sanity checks to ensure the session is still active
-        if Self::is_session_alive(&self, session_id).await {
+        if !Self::is_session_alive(&self, session_ping.session_id).await {
             return Err("Session not found or is no longer alive")
         }
 
         // now update ping
-        sqlx::query("UPDATE application_launch_session SET last_ping=current_timestamp WHERE session_id=?")
-            .bind(&session_id)
+        sqlx::query("UPDATE application_launch_session SET last_ping=? WHERE session_id=?")
+            .bind(&session_ping.timestamp)
+            .bind(&session_ping.session_id)
             .execute(&self.pool).await
             .expect("Error executing the session_ping query");
 
@@ -108,13 +110,24 @@ impl DatabasePool {
             return Err("Session not found or is no longer alive")
         }
 
-        sqlx::query("UPDATE session_courses SET register_timestamp=? WHERE session_id=? AND semester_key=? AND college=? AND dept=? AND course=? AND section=?")
+        sqlx::query(r#"
+            UPDATE session_courses
+            SET register_timestamp=?
+            WHERE session_id=?
+            AND semester_season=?
+            AND semester_year=?
+            AND college=?
+            AND department=?
+            AND course_code=?
+            AND section=?
+        "#)
             .bind(&registration_timestamp)
             .bind(&session_id)
-            .bind(&course.semester_key)
+            .bind(&course.semester.semester_season.to_string())
+            .bind(&course.semester.semester_year)
             .bind(&course.college)
             .bind(&course.department)
-            .bind(&course.course)
+            .bind(&course.course_code)
             .bind(&course.section)
             .execute(&self.pool).await
             .expect("Error executing the mark_course_registered query");
@@ -143,7 +156,7 @@ impl DatabasePool {
             "#)
             .bind(&session_data.session_id)
             .bind(&session_data.did_finish)
-            .bind(&session_data.unknown_crash_occured)
+            .bind(&session_data.unknown_crash_occurred)
             .bind(&session_data.reason)
             .bind(&session_data.avg_cycle_time)
             .bind(&session_data.std_cycle_time)
@@ -178,12 +191,17 @@ impl DatabasePool {
 
         // write the courses to the database as well
         for course in &session_data.target_courses {
-            sqlx::query("INSERT INTO session_courses (session_id, semester_key, college, dept, course, section) VALUES (?, ?, ?, ?, ?, ?)")
+            sqlx::query(r#"
+                INSERT INTO session_courses
+                (session_id, semester_season, semester_year, college, department, course_code, section)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#)
                 .bind(&session_id)
-                .bind(&course.semester_key)
+                .bind(&course.semester.semester_season.to_string())
+                .bind(&course.semester.semester_year)
                 .bind(&course.college)
                 .bind(&course.department)
-                .bind(&course.course)
+                .bind(&course.course_code)
                 .bind(&course.section)
                 .execute(&self.pool).await
                 .expect("Error executing the create_session query");
@@ -202,34 +220,30 @@ impl DatabasePool {
     pub async fn cleanup_dead_sessions(&self) {
 
         let to_update = sqlx::query("SELECT session_id FROM application_launch_session WHERE last_ping < ? AND is_active=1")
-            .bind(chrono::Local::now().timestamp() - 30) // close all sessions where no ping was received for 30sec
+            .bind(chrono::Local::now().timestamp() - 50) // close all sessions where no ping was received for 50sec
             .fetch_all(&self.pool).await
             .expect("Error executing the selection cleanup_dead_sessions query");
 
         for row in &to_update {
             let session_id = row.get_unchecked::<i64, &str>("session_id");
-            // update the session to inactive
+
+            // first, insert a session terminate entry
+            Self::end_session(&self, &ApplicationStopped {
+                credentials: AppCredentials { kerberos_username: "".to_string(), authentication_key: "".to_string() }, // this field isn't used soo...
+                session_id: session_id,
+                did_finish: false,
+                unknown_crash_occurred: true,
+                reason: "Session timed out".to_string(),
+                avg_cycle_time: None,
+                std_cycle_time: None,
+                avg_sleep_time: None,
+                std_sleep_time: None,
+                timestamp: chrono::Local::now().timestamp()
+            }).await.expect("Error executing the cleanup_dead_sessions query");
+
+            // now update the session to inactive
             sqlx::query("UPDATE application_launch_session SET is_active=0 WHERE session_id=?")
                 .bind(&session_id)
-                .execute(&self.pool).await
-                .expect("Error executing the cleanup_dead_sessions query");
-            // insert a session terminate entry
-            sqlx::query(r#"
-                INSERT INTO application_terminate_session
-                (session_id, did_finish, unknown_crash, reason,
-                avg_cycle_time, cycle_time_std, avg_sleep_time,
-                sleep_time_std, terminate_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#)
-                .bind(&session_id)
-                .bind(&false)
-                .bind(&true)
-                .bind(&"Session timed out".to_string())
-                .bind(None as Option<f32>)
-                .bind(None as Option<f32>)
-                .bind(None as Option<f32>)
-                .bind(None as Option<f32>)
-                .bind(&chrono::Local::now().timestamp())
                 .execute(&self.pool).await
                 .expect("Error executing the cleanup_dead_sessions query");
         }
@@ -264,7 +278,7 @@ impl DatabasePool {
         } else {
             let row = result.get(0).unwrap();
             Option::from(DeviceMeta {
-                ip: row.get_unchecked::<String, &str>("device_ip"),
+                ip: row.get_unchecked::<Option<String>, &str>("device_ip"),
                 os: row.get_unchecked::<String, &str>("device_os"),
                 system_arch: row.get_unchecked::<String, &str>("system_arch"),
                 core_count: row.get_unchecked::<i16, &str>("device_cores"),
@@ -292,7 +306,7 @@ impl DatabasePool {
             demo_expired_at        bigint                                        null,
             premium_since          bigint                                        null,
             premium_expiry         bigint                                        null,
-            registration_timestamp bigint      default CURRENT_TIMESTAMP         not null,
+            registration_timestamp bigint      default unix_timestamp()          not null,
             PRIMARY KEY (kerberos_username),
             UNIQUE KEY (authentication_key)
         );
@@ -304,16 +318,16 @@ impl DatabasePool {
         create table if not exists application_launch_session
         (
             session_id         int auto_increment,
-            kerberos_username  varchar(64)                       not null,
-            device_ip          varchar(16)                               not null,
-            device_os          varchar(32)                       null,
-            system_arch        varchar(12)                       null,
-            device_cores       smallint                          null,
-            device_clock_speed float                             null,
-            grant_type         enum('Full', 'Demo', 'None')      not null,
-            launch_time        bigint                            not null,
-            is_active          tinyint(1)                        default 1 not null,
-            last_ping          bigint default current_timestamp  not null,
+            kerberos_username  varchar(64)                               not null,
+            device_ip          varchar(16)                               null,
+            device_os          varchar(32)                               null,
+            system_arch        varchar(32)                               null,
+            device_cores       smallint                                  null,
+            device_clock_speed float                                     null,
+            grant_type         enum('Full', 'Demo', 'Expired', 'Error')  not null,
+            launch_time        bigint                                    not null,
+            is_active          tinyint(1)                                default 1 not null,
+            last_ping          bigint default unix_timestamp()           not null,
             primary key (session_id),
             foreign key (kerberos_username) references users (kerberos_username)
         );
@@ -324,14 +338,15 @@ impl DatabasePool {
         self.pool.execute(r#"
         create table if not exists session_courses
         (
-            session_id          int          not null,
-            semester_key        varchar(12)  not null,
-            college             varchar(6)   not null,
-            dept                varchar(6)   not null,
-            course              smallint     not null,
-            section             varchar(6)   not null,
-            register_timestamp  bigint       null,
-            primary key (session_id, semester_key, college, dept, course, section),
+            session_id          int                                           not null,
+            semester_season     enum('Summer1', 'Summer2', 'Fall', 'Spring')  not null,
+            semester_year       smallint                                      not null,
+            college             varchar(6)                                    not null,
+            department          varchar(6)                                    not null,
+            course_code         smallint                                      not null,
+            section             varchar(6)                                    not null,
+            register_timestamp  bigint                                        null,
+            primary key (session_id, semester_season, semester_year, college, department, course_code, section),
             foreign key (session_id) references application_launch_session (session_id)
         );
         "#).await
@@ -343,7 +358,7 @@ impl DatabasePool {
         (
             session_id           int auto_increment,
             did_finish           tinyint(1)   not null,
-            unknown_crash        tinyint(1)   not null,
+            unknown_crash        tinyint(1)   null,
             reason               varchar(512) not null,
             avg_cycle_time       float        null,
             cycle_time_std       float        null,

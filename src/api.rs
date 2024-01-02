@@ -1,5 +1,5 @@
-use actix_web::{get, HttpResponse, post, Responder, web};
-use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, EmailSendRequest, RegistrationNotification, SessionPing};
+use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
+use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, DeviceMeta, EmailSendRequest, RegistrationNotification, SessionPing};
 use crate::data_structs::signed_response::{ApplicationStartPermission, GrantLevel, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
 use crate::SharedResources;
 
@@ -15,8 +15,8 @@ async fn debug_ping() -> impl Responder {
 //  3. if they buy premium that same token becomes premium
 
 #[post("/app-started")]
-pub async fn app_start(data: web::Data<SharedResources>, payload: web::Json<ApplicationStart>) -> impl Responder {
-    let start_data: ApplicationStart = payload.into_inner();
+pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, payload: web::Json<ApplicationStart>) -> impl Responder {
+    let mut start_data: ApplicationStart = payload.into_inner();
 
     let is_authenticated = data.database.is_authenticated(
         &start_data.credentials.kerberos_username,
@@ -24,25 +24,32 @@ pub async fn app_start(data: web::Data<SharedResources>, payload: web::Json<Appl
     ).await;
 
     if !is_authenticated {
-        return HttpResponse::Unauthorized().json("Unauthorized");
+        return HttpResponse::Unauthorized().json("Unauthorized"); //todo, fix this
     }
+
+    // add client ip to the request
+    start_data.device_meta.ip = Option::from(req.connection_info().realip_remote_addr().unwrap().to_string());
 
     // check if there is another running session first
     let active_session = data.database.has_active_session(&start_data.credentials.kerberos_username).await;
     if active_session.is_some() {
-        let device = active_session.unwrap();
-        let message = format!("You already have an active session running on device {:?}", device);
-        return HttpResponse::BadRequest().json(message);
+        let device: DeviceMeta = active_session.unwrap();
+        let mut message = format!("You already have an active session running on your {} device", device.os).to_string();
+        let to_append = if device.ip.is_some() {
+            format!(" with ip {}.", device.ip.unwrap())
+        } else {
+            ".".to_string()
+        };
+        message.push_str(to_append.as_str());
+        message.push_str(" If you believe this is an error, please wait a few seconds and try \
+                                 again. Otherwise, please contact us for support.");
+        return HttpResponse::BadRequest().json(message);  //todo, fix this
     }
 
     let grant = data.database
         .get_user_grant(&start_data.credentials.kerberos_username).await;
 
     let session_id = data.database.create_session(&start_data, &grant).await;
-
-    let mut to_sign_vec: Vec<&str> = Vec::new();
-    to_sign_vec.push(start_data.credentials.kerberos_username.as_str());
-    to_sign_vec.push(grant.as_str());
 
     let response = ApplicationStartPermission::new(
         start_data.credentials.kerberos_username,
@@ -69,7 +76,7 @@ async fn app_stop(data: web::Data<SharedResources>, payload: web::Json<Applicati
     ).await;
 
     if !is_authenticated {
-        return HttpResponse::Unauthorized().json("Unauthorized");
+        return HttpResponse::Unauthorized().json("Unauthorized"); //todo, fix this
     }
 
     return match data.database.end_session(&stop_data).await {
@@ -85,7 +92,7 @@ async fn app_stop(data: web::Data<SharedResources>, payload: web::Json<Applicati
                 signature: signed_str
             })
         },
-        Err(_) => HttpResponse::BadRequest().json("Invalid session id")
+        Err(_) => HttpResponse::BadRequest().json("Invalid session id") //todo, fix this
     };
 }
 
@@ -102,7 +109,7 @@ async fn ping(data: web::Data<SharedResources>, payload: web::Json<SessionPing>)
         return HttpResponse::Unauthorized().json("Unauthorized");
     }
 
-    return match data.database.session_ping(ping_data.session_id).await {
+    return match data.database.session_ping(&ping_data).await {
         Ok(_) => {
             let response = StatusResponse::new(
                 ping_data.credentials.kerberos_username,
@@ -115,7 +122,7 @@ async fn ping(data: web::Data<SharedResources>, payload: web::Json<SessionPing>)
                 signature: signed_str
             })
         },
-        Err(_) => HttpResponse::BadRequest().json("Invalid session id")
+        Err(_) => HttpResponse::BadRequest().json("Invalid session id") //todo, fix this
     };
 }
 
@@ -129,7 +136,7 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
     ).await;
 
     if !is_authenticated {
-        return HttpResponse::Unauthorized().json("Unauthorized");
+        return HttpResponse::Unauthorized().json("Unauthorized"); //todo, fix this
     }
 
     return match data.database.mark_course_registered(
@@ -155,7 +162,7 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
                 signature: signed_str
             })
         },
-        Err(_) => HttpResponse::BadRequest().json("Invalid session id")
+        Err(_) => HttpResponse::BadRequest().json("Invalid session id") //todo, fix this
     };
 }
 
