@@ -212,8 +212,44 @@ impl DatabasePool {
         return session_id;
     }
 
-    pub async fn create_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> String {
+    pub async fn create_or_update_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> String {
         // generate a random authentication key using only alphabetical cased characters
+        let auth_key: String = self.generate_new_key();
+        println!("{}", auth_key);
+
+        let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
+
+        sqlx::query(r#"
+                INSERT INTO users
+                    (kerberos_username, given_name, family_name, authentication_key,
+                    google_access_token, google_refresh_token)
+                VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
+                    given_name=?, family_name=?, google_access_token=?, google_refresh_token=?
+            "#)
+            .bind(kerberos_username)
+            .bind(&user_info.given_name)
+            .bind(&user_info.family_name)
+            .bind(&auth_key)
+            .bind(&google_access_token.access_token)
+            .bind(&google_access_token.refresh_token)
+            .execute(&self.pool).await
+            .expect("Error executing the create_user query");
+
+        kerberos_username.to_string()
+    }
+
+    pub async fn reset_authentication_key(&self, kerberos_username: &str) -> String {
+        let auth_key: String = self.generate_new_key();
+        sqlx::query("UPDATE users SET authentication_key=? WHERE kerberos_username=?")
+            .bind(&auth_key)
+            .bind(&kerberos_username)
+            .execute(&self.pool).await
+            .expect("Error executing the reset_authentication_key query");
+
+        auth_key
+    }
+
+    fn generate_new_key(&self) -> String {
         let mut rng = rand::thread_rng();
         let mut auth_key = String::new();
         for _ in 0..64 {
@@ -224,27 +260,8 @@ impl DatabasePool {
             };
             auth_key.push(random_char);
         }
-        println!("{}", auth_key);
 
-        let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
-
-        sqlx::query(r#"
-                INSERT INTO users
-                    (kerberos_username, bu_email, given_name, family_name, authentication_key,
-                    google_access_token, google_refresh_token)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            "#)
-            .bind(kerberos_username)
-            .bind(&user_info.email)
-            .bind(&user_info.given_name)
-            .bind(&user_info.family_name)
-            .bind(&auth_key)
-            .bind(&google_access_token.access_token)
-            .bind(&google_access_token.refresh_token)
-            .execute(&self.pool).await
-            .expect("Error executing the create_user query");
-
-        kerberos_username.to_string()
+        return auth_key;
     }
 
     pub async fn cleanup_dead_sessions(&self) {
@@ -332,7 +349,6 @@ impl DatabasePool {
         self.pool.execute(r#"
         create table if not exists users (
             kerberos_username      varchar(64)                                   not null,
-            bu_email               varchar(64)                                   not null,
             given_name             varchar(128)                                  not null,
             family_name            varchar(128)                                  not null,
             authentication_key     varchar(64)                                   not null,

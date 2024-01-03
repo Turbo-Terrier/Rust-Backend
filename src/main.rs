@@ -6,6 +6,8 @@ mod google_oauth;
 pub mod data_structs {
     pub mod app_start_request;
     pub mod signed_response;
+
+    pub mod user;
 }
 
 pub mod api {
@@ -30,6 +32,7 @@ use api::app_api;
 use encrypted_signing::Ed25519SecretKey;
 use google_oauth::GoogleClientSecretWrapper;
 use api::web_api;
+use crate::data_structs::user::User;
 use crate::google_oauth::GoogleClientSecret;
 
 pub struct SharedResources {

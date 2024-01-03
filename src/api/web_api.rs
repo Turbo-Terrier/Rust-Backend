@@ -1,4 +1,5 @@
 use actix_web::{get, HttpRequest, HttpResponse, Responder, web};
+use crate::google_oauth::GoogleAuthCode;
 use crate::SharedResources;
 
 #[get("/ping")]
@@ -7,17 +8,8 @@ async fn debug_ping() -> impl Responder {
     "pong!"
 }
 
-#[derive(Debug)]
-#[derive(serde::Deserialize)]
-struct Info {
-    code: String,
-    scope: String,
-    authuser: String,
-    prompt: String,
-}
-
 #[get("/register")]
-async fn oauth_register(data: web::Data<SharedResources>, req: HttpRequest, info: web::Query<Info>) -> impl Responder {
+async fn oauth_register(data: web::Data<SharedResources>, info: web::Query<GoogleAuthCode>) -> impl Responder {
     let client_secrets = &data.get_ref().google_client_secret;
     let database = &data.get_ref().database;
 
@@ -25,8 +17,9 @@ async fn oauth_register(data: web::Data<SharedResources>, req: HttpRequest, info
     // just to test that the server is running
     let access_token = client_secrets.get_access_token(code).await;
     let user_info = client_secrets.get_user_info(access_token.access_token.as_str()).await;
+    // todo: may also need to store access_token.expiry
 
-    database.create_user(&user_info, &access_token).await;
+    database.create_or_update_user(&user_info, &access_token).await;
 
     HttpResponse::Ok().json(user_info) //todo: complete this, this is temp
 }

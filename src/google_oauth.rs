@@ -26,6 +26,15 @@ pub struct GoogleAccessToken {
     pub refresh_token: String,
 }
 
+#[derive(Debug)]
+#[derive(serde::Deserialize)]
+pub struct GoogleAuthCode {
+    pub code: String,
+    pub scope: String,
+    pub authuser: String,
+    pub prompt: String,
+}
+
 #[derive(Deserialize)]
 #[derive(Debug)]
 pub struct GoogleClientSecret {
