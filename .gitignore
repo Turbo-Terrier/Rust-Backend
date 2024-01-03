@@ -1,3 +1,5 @@
 /target
-config.yml
 Cargo.lock
+*.der
+*.json
+*.yml

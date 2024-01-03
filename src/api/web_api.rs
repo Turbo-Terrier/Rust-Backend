@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use actix_web::{get, HttpRequest, HttpResponse, Responder, web};
-use serde_json::value::Serializer;
 use crate::data_structs::user::User;
 use crate::google_oauth::GoogleAuthCode;
 use crate::SharedResources;
@@ -8,7 +7,7 @@ use crate::SharedResources;
 #[get("/ping")]
 async fn debug_ping() -> impl Responder {
     // just to test that the server is running
-    "pong!"
+    "Pong!"
 }
 
 #[get("/register")]
@@ -45,7 +44,7 @@ async fn profile_info(data: web::Data<SharedResources>, req: HttpRequest) -> imp
     if auth_header.is_some() {
         let user_auth_str = auth_header.unwrap().to_str().unwrap();
         let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
-        return HttpResponse::Ok().json(user.claims()); //todo: shouldnt send back users own access token
+        return HttpResponse::Ok().json(user.claims());
     } else {
         return HttpResponse::Unauthorized().json("No authorization key supplied");
     }

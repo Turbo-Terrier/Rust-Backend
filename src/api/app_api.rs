@@ -6,7 +6,7 @@ use crate::SharedResources;
 #[get("/ping")]
 async fn debug_ping() -> impl Responder {
     // just to test that the server is running
-    "pong!"
+    "Pong!"
 }
 
 //todo: authenticate requests to make sure not just anyone can spam the api
