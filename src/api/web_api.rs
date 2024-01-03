@@ -1,11 +1,5 @@
 use actix_web::{get, HttpRequest, HttpResponse, Responder, web};
-use futures::SinkExt;
-use oauth2_google;
-use reqwest::Client;
 use crate::SharedResources;
-use oauth2_client::authorization_code_grant::{access_token_endpoint, AccessTokenEndpoint};
-use oauth2_client::re_exports::{Endpoint, Response};
-use serde::de::Unexpected::Bytes;
 
 #[get("/ping")]
 async fn debug_ping() -> impl Responder {

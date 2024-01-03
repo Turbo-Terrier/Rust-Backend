@@ -1,4 +1,3 @@
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
@@ -61,7 +60,8 @@ impl GoogleClientSecret {
                     ("client_id", self.client_id.as_str()),
                     ("client_secret", self.client_secret.as_str()),
                     ("scope", ""),
-                    ("grant_type", "authorization_code")])
+                    ("grant_type", "authorization_code")]
+            )
             .send().await.unwrap().json::<GoogleAccessToken>().await.unwrap();
         return response;
     }
