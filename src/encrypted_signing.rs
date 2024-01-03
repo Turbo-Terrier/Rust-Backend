@@ -1,14 +1,61 @@
 use std::fs::File;
 use std::io::Read;
+use hmac::Hmac;
+use jwt::{AlgorithmType, Header, SignWithKey, Token, Verified, VerifyWithKey};
+use jwt::token::Signed;
 use ring::signature::{Ed25519KeyPair, Signature};
+use serde::{Deserialize, Serialize};
 use crate::data_structs::signed_response::SignableData;
+use serde::de::DeserializeOwned;
+use sha2::digest::KeyInit;
+use sha2::Sha384;
 
-const KEY_SIZE: usize = 48;
+const ED25519_KEY_SIZE: usize = 48;
 
 #[derive(Debug)]
 pub struct Ed25519SecretKey {
-    key_bytes: [u8; KEY_SIZE],
+    key_bytes: [u8; ED25519_KEY_SIZE],
     private_key: Ed25519KeyPair,
+}
+
+pub struct JWTSecretKey {
+    pub secret_key: String,
+}
+
+impl Clone for JWTSecretKey {
+    fn clone(&self) -> Self {
+        return JWTSecretKey {
+            secret_key: self.secret_key.clone()
+        }
+    }
+}
+
+impl JWTSecretKey {
+
+    pub fn new(secret_key: String) -> JWTSecretKey {
+        return JWTSecretKey {
+            secret_key
+        };
+    }
+
+    pub fn encrypt_jwt_token<T: Serialize>(&self, data: T) -> Token<Header, T, Signed> {
+        let key: Hmac<Sha384> = Hmac::new_from_slice(self.secret_key.as_bytes()).unwrap();
+        let header = Header {
+            algorithm: AlgorithmType::Hs384,
+            ..Default::default()
+        };
+        let token: Token<Header, T, Signed> = Token::new(header, data).sign_with_key(&key).unwrap();
+
+        return token;
+    }
+
+    pub fn decrypt_jwt_token<T>(&self, str_token: &str) -> Token<Header, T, Verified>
+            where T: DeserializeOwned, T: Clone {
+        let key: Hmac<Sha384> = Hmac::new_from_slice(self.secret_key.as_bytes()).unwrap();
+        let token: Token<Header, T, Verified> = str_token.verify_with_key(&key).unwrap();
+        return token
+    }
+
 }
 
 impl Ed25519SecretKey {
@@ -19,10 +66,10 @@ impl Ed25519SecretKey {
             .read_to_end(&mut priv_key)
             .expect("Error reading private-key!");
 
-        assert_eq!(priv_key.len(), KEY_SIZE, "Private key size incorrect!");
+        assert_eq!(priv_key.len(), ED25519_KEY_SIZE, "Private key size incorrect!");
 
         return Ed25519SecretKey {
-            key_bytes: <[u8; KEY_SIZE]>::try_from(priv_key.as_slice()).unwrap(),
+            key_bytes: <[u8; ED25519_KEY_SIZE]>::try_from(priv_key.as_slice()).unwrap(),
             private_key: Ed25519KeyPair::from_pkcs8_maybe_unchecked(priv_key.as_slice())
             .expect("Error loading the ed25519 private key from bytes!")
         };

@@ -5,6 +5,7 @@ use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
 use crate::data_structs::app_start_request::{AppCredentials, ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta, SessionPing};
 use crate::data_structs::signed_response::GrantLevel;
+use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 
 #[derive(Debug)]
@@ -25,8 +26,8 @@ impl DatabasePool {
         let connection_url = format!("mysql://{user}:{pass}@{host}:{port}/{database}");
 
         let pool = match MySqlPoolOptions::new()
-            .max_connections(3)
-            .min_connections(3)
+            .max_connections(5)
+            .min_connections(5)
             .acquire_timeout(Duration::from_secs(5))
             .connect(&connection_url).await {
                     Ok(res) => res,
@@ -56,7 +57,6 @@ impl DatabasePool {
             .expect("Error fetching rows for the get_user_grant query");
 
         if result.is_empty() {
-            //Self::create_user(&self, kerberos_username).await;
             return GrantLevel::Error;
         } else {
             let row_res = result.get(0).unwrap();
@@ -212,30 +212,40 @@ impl DatabasePool {
         return session_id;
     }
 
-    pub async fn create_or_update_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> String {
+    pub async fn create_or_update_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> User {
         // generate a random authentication key using only alphabetical cased characters
         let auth_key: String = self.generate_new_key();
-        println!("{}", auth_key);
-
         let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
+
+        let registration_timestamp = chrono::Local::now().timestamp();
+        let user = User {
+            kerberos_username: kerberos_username.to_string(),
+            given_name: user_info.given_name.clone(),
+            family_name: user_info.family_name.clone(),
+            authentication_key: auth_key,
+            demo_expired_at: None,
+            premium_since: None,
+            premium_expiry: None,
+            registration_timestamp: registration_timestamp
+        };
 
         sqlx::query(r#"
                 INSERT INTO users
                     (kerberos_username, given_name, family_name, authentication_key,
-                    google_access_token, google_refresh_token)
-                VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
-                    given_name=?, family_name=?, google_access_token=?, google_refresh_token=?
+                    registration_timestamp)
+                VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
+                    given_name = VALUES(given_name),
+                    family_name = VALUES(family_name)
             "#)
-            .bind(kerberos_username)
-            .bind(&user_info.given_name)
-            .bind(&user_info.family_name)
-            .bind(&auth_key)
-            .bind(&google_access_token.access_token)
-            .bind(&google_access_token.refresh_token)
+            .bind(&user.kerberos_username)
+            .bind(&user.given_name)
+            .bind(&user.family_name)
+            .bind(&user.authentication_key)
+            .bind(&user.registration_timestamp)
             .execute(&self.pool).await
             .expect("Error executing the create_user query");
 
-        kerberos_username.to_string()
+        return user
     }
 
     pub async fn reset_authentication_key(&self, kerberos_username: &str) -> String {
@@ -352,8 +362,6 @@ impl DatabasePool {
             given_name             varchar(128)                                  not null,
             family_name            varchar(128)                                  not null,
             authentication_key     varchar(64)                                   not null,
-            google_access_token    varchar(256)                                  not null,
-            google_refresh_token   varchar(256)                                  not null,
             demo_expired_at        bigint                                        null,
             premium_since          bigint                                        null,
             premium_expiry         bigint                                        null,

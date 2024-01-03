@@ -71,7 +71,8 @@ impl GoogleClientSecret {
                     ("scope", ""),
                     ("grant_type", "authorization_code")]
             )
-            .send().await.unwrap().json::<GoogleAccessToken>().await.unwrap();
+            .send().await.unwrap().text().await.unwrap();
+        let response = serde_json::from_str::<GoogleAccessToken>(response.as_str()).unwrap(); //todo error handling
         return response;
     }
 

@@ -42,8 +42,8 @@ impl SemesterSeason {
     }
 
     pub fn from_string(season: &str) -> SemesterSeason {
-        let lower_season = season.clone().to_lowercase().as_str();
-        match season {
+        let lower_season = season.clone().to_lowercase();
+        match lower_season.as_str() {
             "summer1" => SemesterSeason::Summer1,
             "summer2" => SemesterSeason::Summer2,
             "fall" => SemesterSeason::Fall,

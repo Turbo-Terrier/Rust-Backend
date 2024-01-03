@@ -32,14 +32,15 @@ use api::app_api;
 use encrypted_signing::Ed25519SecretKey;
 use google_oauth::GoogleClientSecretWrapper;
 use api::web_api;
-use crate::data_structs::user::User;
+use crate::encrypted_signing::JWTSecretKey;
 use crate::google_oauth::GoogleClientSecret;
 
 pub struct SharedResources {
     private_key: Ed25519SecretKey,
     database: DatabasePool,
     smtp_transport: SmtpTransport,
-    google_client_secret: GoogleClientSecret
+    google_client_secret: GoogleClientSecret,
+    jwt_secret: JWTSecretKey,
 }
 
 impl Clone for SharedResources {
@@ -48,7 +49,8 @@ impl Clone for SharedResources {
             private_key: self.private_key.clone(),
             database: self.database.clone(),
             smtp_transport: self.smtp_transport.clone(),
-            google_client_secret: self.google_client_secret.clone()
+            google_client_secret: self.google_client_secret.clone(),
+            jwt_secret: self.jwt_secret.clone(),
         }
     }
 }
@@ -93,6 +95,10 @@ async fn load() -> Result<SharedResources, std::io::Error> {
         .expect("ed25519-private-key not found!");
     let private_key = Ed25519SecretKey::new(private_key_path);
 
+    let jwt_secret: &str = config["jwt-secret-key"].as_str()
+        .expect("jwt-secret-key not found!");
+    let jwt_secret: JWTSecretKey = JWTSecretKey::new(jwt_secret.to_string());
+
     println!("Loading SMTP configuration");
     let smtp_config = &config["smtp"];
     let smtp_host = smtp_config["host"].as_str().expect("smtp.host not found!");
@@ -105,7 +111,8 @@ async fn load() -> Result<SharedResources, std::io::Error> {
         private_key,
         database,
         smtp_transport,
-        google_client_secret
+        google_client_secret,
+        jwt_secret
     };
 
     return Ok(shared_resources);
@@ -150,6 +157,7 @@ async fn main() -> std::io::Result<()> {
                 .service(web_api::debug_ping)
                 .service(web_api::oauth_register)
                 .service(web_api::oauth_url)
+                .service(web_api::profile_info)
             )
     })
         .bind(("0.0.0.0", 8080))?
