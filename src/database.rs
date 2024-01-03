@@ -1,9 +1,11 @@
 use std::fmt::{Debug};
 use std::time::Duration;
+use rand::Rng;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
 use crate::data_structs::app_start_request::{AppCredentials, ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta, SessionPing};
 use crate::data_structs::signed_response::GrantLevel;
+use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 
 #[derive(Debug)]
 pub struct DatabasePool {
@@ -210,11 +212,39 @@ impl DatabasePool {
         return session_id;
     }
 
-    async fn create_user(&self, kerberos_username: &String) {
-        sqlx::query("INSERT INTO users (kerberos_username) VALUES (?)")
-            .bind(&kerberos_username)
+    pub async fn create_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> String {
+        // generate a random authentication key using only alphabetical cased characters
+        let mut rng = rand::thread_rng();
+        let mut auth_key = String::new();
+        for _ in 0..64 {
+            let random_char = if rng.gen::<bool>() {
+                rng.gen_range(65..=90) as u8 as char
+            } else {
+                rng.gen_range(97..=122) as u8 as char
+            };
+            auth_key.push(random_char);
+        }
+        println!("{}", auth_key);
+
+        let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
+
+        sqlx::query(r#"
+                INSERT INTO users
+                    (kerberos_username, bu_email, given_name, family_name, authentication_key,
+                    google_access_token, google_refresh_token)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#)
+            .bind(kerberos_username)
+            .bind(&user_info.email)
+            .bind(&user_info.given_name)
+            .bind(&user_info.family_name)
+            .bind(&auth_key)
+            .bind(&google_access_token.access_token)
+            .bind(&google_access_token.refresh_token)
             .execute(&self.pool).await
             .expect("Error executing the create_user query");
+
+        kerberos_username.to_string()
     }
 
     pub async fn cleanup_dead_sessions(&self) {
@@ -232,7 +262,7 @@ impl DatabasePool {
                 credentials: AppCredentials { kerberos_username: "".to_string(), authentication_key: "".to_string() }, // this field isn't used soo...
                 session_id: session_id,
                 did_finish: false,
-                unknown_crash_occurred: true,
+                unknown_crash_occurred: Option::Some(true),
                 reason: "Session timed out".to_string(),
                 avg_cycle_time: None,
                 std_cycle_time: None,
@@ -302,7 +332,12 @@ impl DatabasePool {
         self.pool.execute(r#"
         create table if not exists users (
             kerberos_username      varchar(64)                                   not null,
+            bu_email               varchar(64)                                   not null,
+            given_name             varchar(128)                                  not null,
+            family_name            varchar(128)                                  not null,
             authentication_key     varchar(64)                                   not null,
+            google_access_token    varchar(256)                                  not null,
+            google_refresh_token   varchar(256)                                  not null,
             demo_expired_at        bigint                                        null,
             premium_since          bigint                                        null,
             premium_expiry         bigint                                        null,

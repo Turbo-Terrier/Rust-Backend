@@ -1,11 +1,16 @@
 pub mod database;
-pub mod api;
 mod encrypted_signing;
 mod smtp_mailing_util;
+mod google_oauth;
 
 pub mod data_structs {
     pub mod app_start_request;
     pub mod signed_response;
+}
+
+pub mod api {
+    pub mod app_api;
+    pub mod web_api;
 }
 
 
@@ -13,7 +18,7 @@ use std::fs::File;
 use database::DatabasePool;
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
-use yaml_rust::YamlLoader;
+use yaml_rust::{Yaml, YamlLoader};
 use actix_web::{App, HttpServer, middleware, Responder, web};
 use actix_web::middleware::Logger;
 use actix_web::rt::time;
@@ -21,12 +26,17 @@ use lettre::SmtpTransport;
 use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
 use untrusted::{self};
-use crate::encrypted_signing::Ed25519SecretKey;
+use api::app_api;
+use encrypted_signing::Ed25519SecretKey;
+use google_oauth::GoogleClientSecretWrapper;
+use api::web_api;
+use crate::google_oauth::GoogleClientSecret;
 
 pub struct SharedResources {
     private_key: Ed25519SecretKey,
     database: DatabasePool,
-    smtp_transport: SmtpTransport
+    smtp_transport: SmtpTransport,
+    google_client_secret: GoogleClientSecret
 }
 
 impl Clone for SharedResources {
@@ -34,7 +44,8 @@ impl Clone for SharedResources {
         return SharedResources {
             private_key: self.private_key.clone(),
             database: self.database.clone(),
-            smtp_transport: self.smtp_transport.clone()
+            smtp_transport: self.smtp_transport.clone(),
+            google_client_secret: self.google_client_secret.clone()
         }
     }
 }
@@ -51,22 +62,27 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     println!("Loading configurations...");
 
     let mut buf: String = read_file_as_str("config.yml");
-    let config = match YamlLoader::load_from_str(&mut buf) {
-        Ok(config) => config,
-        Err(_) => panic!("Error loading yml file")
-    };
-    let config = &config[0];
+    let config: Vec<Yaml> = YamlLoader::load_from_str(&mut buf).expect("Error loading yml file");
+    let config: &Yaml = &config[0];
 
     println!("Connecting to the database...");
 
-    let creds = &config["mysql"];
-    let host = creds["host"].as_str().expect("mysql.host not found!");
-    let port = creds["port"].as_i64().expect("mysql.port not found!") as i16;
-    let user = creds["username"].as_str().expect("mysql.user not found!");
-    let pass = creds["password"].as_str().expect("mysql.password not found!");
-    let database = creds["database"].as_str().expect("mysql.database not found!");
+    let creds: &Yaml = &config["mysql"];
+    let host: &str = creds["host"].as_str().expect("mysql.host not found!");
+    let port: i16 = creds["port"].as_i64().expect("mysql.port not found!") as i16;
+    let user: &str = creds["username"].as_str().expect("mysql.user not found!");
+    let pass: &str = creds["password"].as_str().expect("mysql.password not found!");
+    let database: &str = creds["database"].as_str().expect("mysql.database not found!");
     let database: DatabasePool = DatabasePool::new(host, port, user, pass, database).await;
     database.init().await;
+
+    println!("Loading Google OAuth2 Secrets");
+    let oauth_config_location = &config["google-client-secret"].as_str()
+        .expect("google-client-secret not found!");
+    let mut buf: String = read_file_as_str(oauth_config_location);
+    let oauth_creds: GoogleClientSecretWrapper = serde_json::from_str::<GoogleClientSecretWrapper>(&mut buf)
+        .expect("Error parsing google-client-secret file!");
+    let google_client_secret: GoogleClientSecret = oauth_creds.web;
 
     println!("Loading encryption keys");
 
@@ -85,7 +101,8 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     let shared_resources = SharedResources {
         private_key,
         database,
-        smtp_transport
+        smtp_transport,
+        google_client_secret
     };
 
     return Ok(shared_resources);
@@ -118,13 +135,18 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(shared_resources.clone()))
             .wrap(Logger::new("%a \"%r\" %s %b \"%{User-Agent}i\" %T")) //todo: doesnt work as expected
-            .service(web::scope("/api/v1",)
-                .service(api::app_start)
-                .service(api::app_stop)
-                .service(api::send_mail)
-                .service(api::course_registered)
-                .service(api::ping)
-                .service(api::debug_ping)
+            .service(web::scope("/api/app/v1",)
+                .service(app_api::app_start)
+                .service(app_api::app_stop)
+                .service(app_api::send_mail)
+                .service(app_api::course_registered)
+                .service(app_api::ping)
+                .service(app_api::debug_ping)
+            )
+            .service(web::scope("/api/web/v1")
+                .service(web_api::debug_ping)
+                .service(web_api::oauth_register)
+                .service(web_api::oauth_url)
             )
     })
         .bind(("0.0.0.0", 8080))?
