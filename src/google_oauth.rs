@@ -49,8 +49,6 @@ pub struct GoogleClientSecret {
 
 impl GoogleClientSecret {
 
-    // https://accounts.google.com/o/oauth2/auth?redirect_uri=http://localhost:8082/api/web/v1/register&prompt=consent&response_type=code&client_id=625855115094-emsoq1dbbupaunb25ms2uiu3ppofie1f.apps.googleusercontent.com&scope=openid+https://www.googleapis.com/auth/userinfo.email+https://www.googleapis.com/auth/userinfo.profile&access_type=offline
-
     pub fn create_oauth_uri(&self) -> String {
         let mut uri = format!("{}?redirect_uri={}&prompt=consent&response_type=code&client_id={}&scope={}&access_type=offline",
                               self.auth_uri,

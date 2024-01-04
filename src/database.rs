@@ -229,6 +229,7 @@ impl DatabasePool {
             given_name: user_info.given_name.clone(),
             family_name: user_info.family_name.clone(),
             authentication_key: auth_key,
+            profile_image_url: user_info.picture.clone(),
             demo_expired_at: None,
             premium_since: None,
             premium_expiry: None,
@@ -237,15 +238,16 @@ impl DatabasePool {
 
         sqlx::query(r#"
                 INSERT INTO users
-                    (kerberos_username, given_name, family_name, authentication_key,
-                    registration_timestamp)
-                VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
+                    (kerberos_username, given_name, family_name, profile_image_url,
+                    authentication_key, registration_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
                     given_name = VALUES(given_name),
                     family_name = VALUES(family_name)
             "#)
             .bind(&user.kerberos_username)
             .bind(&user.given_name)
             .bind(&user.family_name)
+            .bind(&user.profile_image_url)
             .bind(&user.authentication_key)
             .bind(&user.registration_timestamp)
             .execute(&self.pool).await
@@ -254,7 +256,7 @@ impl DatabasePool {
         return user
     }
 
-    pub async fn reset_authentication_key(&self, kerberos_username: &str) -> String {
+    pub async fn reset_authentication_key(&self, kerberos_username: &String) -> String {
         let auth_key: String = self.generate_new_key();
         sqlx::query("UPDATE users SET authentication_key=? WHERE kerberos_username=?")
             .bind(&auth_key)
@@ -367,6 +369,7 @@ impl DatabasePool {
             kerberos_username      varchar(64)                                   not null,
             given_name             varchar(128)                                  not null,
             family_name            varchar(128)                                  not null,
+            profile_image_url      varchar(256)                                  null,
             authentication_key     varchar(64)                                   not null,
             demo_expired_at        bigint                                        null,
             premium_since          bigint                                        null,

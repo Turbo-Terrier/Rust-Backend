@@ -2,6 +2,7 @@ pub mod database;
 mod encrypted_signing;
 mod smtp_mailing_util;
 mod google_oauth;
+mod stripe_util;
 
 pub mod data_structs {
     pub mod user;
@@ -21,6 +22,7 @@ pub mod data_structs {
         pub mod app_start_permission;
         pub mod signable_data;
         pub mod status_response;
+        pub mod web_register_response;
     }
 }
 
@@ -35,9 +37,11 @@ use database::DatabasePool;
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 use yaml_rust::{Yaml, YamlLoader};
-use actix_web::{App, HttpServer, middleware, Responder, web};
+use actix_web::{App, Handler, HttpServer, Responder, web};
 use actix_web::middleware::Logger;
 use actix_web::rt::time;
+use env_logger::Env;
+use futures::FutureExt;
 use lettre::SmtpTransport;
 use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
@@ -153,12 +157,12 @@ async fn main() -> std::io::Result<()> {
             interval.tick().await;
         }
     });
-
     println!("Starting HTTP server...");
+    env_logger::init_from_env(Env::default().default_filter_or("info")); // enables built in actix logger
     HttpServer::new( move || {
         App::new()
             .app_data(web::Data::new(shared_resources.clone()))
-            .wrap(Logger::new("%a \"%r\" %s %b \"%{User-Agent}i\" %T")) //todo: doesnt work as expected
+            .wrap(Logger::new("%a \"%r\" %s %b \"%{User-Agent}i\" %T"))
             .service(web::scope("/api/app/v1",)
                 .service(app_api::app_start)
                 .service(app_api::app_stop)
@@ -172,6 +176,7 @@ async fn main() -> std::io::Result<()> {
                 .service(web_api::oauth_register)
                 .service(web_api::oauth_url)
                 .service(web_api::profile_info)
+                .service(web_api::reset_app_token)
             )
     })
         .bind(("0.0.0.0", 8080))?

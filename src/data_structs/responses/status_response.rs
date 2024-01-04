@@ -11,8 +11,7 @@ pub struct StatusResponse {
 }
 
 #[derive(Debug)]
-#[derive(Deserialize)]
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SignedStatusResponse {
     pub data: StatusResponse,
     pub signature: String
