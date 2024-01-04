@@ -4,10 +4,24 @@ mod smtp_mailing_util;
 mod google_oauth;
 
 pub mod data_structs {
-    pub mod app_start_request;
-    pub mod signed_response;
-
     pub mod user;
+    pub mod semester;
+    pub mod device_meta;
+    pub mod app_credentials;
+    pub mod bu_course;
+    pub mod grant_level;
+    pub mod requests {
+        pub mod application_start;
+        pub mod application_stopped;
+        pub mod email_send_request;
+        pub mod registration_notification;
+        pub mod session_ping;
+    }
+    pub mod responses {
+        pub mod app_start_permission;
+        pub mod signable_data;
+        pub mod status_response;
+    }
 }
 
 pub mod api {

@@ -1,6 +1,13 @@
 use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
-use crate::data_structs::app_start_request::{ApplicationStart, ApplicationStopped, DeviceMeta, EmailSendRequest, RegistrationNotification, SessionPing};
-use crate::data_structs::signed_response::{ApplicationStartPermission, GrantLevel, SignedApplicationStartPermission, SignedStatusResponse, StatusResponse};
+use crate::data_structs::device_meta::DeviceMeta;
+use crate::data_structs::grant_level::GrantLevel;
+use crate::data_structs::requests::application_start::ApplicationStart;
+use crate::data_structs::requests::application_stopped::ApplicationStopped;
+use crate::data_structs::requests::email_send_request::EmailSendRequest;
+use crate::data_structs::requests::registration_notification::RegistrationNotification;
+use crate::data_structs::requests::session_ping::SessionPing;
+use crate::data_structs::responses::app_start_permission::{ApplicationStartPermission, SignedApplicationStartPermission};
+use crate::data_structs::responses::status_response::{SignedStatusResponse, StatusResponse};
 use crate::SharedResources;
 
 #[get("/ping")]
@@ -28,7 +35,7 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
     }
 
     // add client ip to the request
-    start_data.device_meta.ip = Option::from(req.connection_info().realip_remote_addr().unwrap().to_string());
+    start_data.device_meta.ip = Option::from(req.connection_info().realip_remote_addr().unwrap().to_string()); //todo test
 
     // check if there is another running session first
     let active_session = data.database.has_active_session(&start_data.credentials.kerberos_username).await;

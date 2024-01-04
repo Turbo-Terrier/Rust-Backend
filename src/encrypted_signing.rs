@@ -5,10 +5,10 @@ use jwt::{AlgorithmType, Header, SignWithKey, Token, Verified, VerifyWithKey};
 use jwt::token::Signed;
 use ring::signature::{Ed25519KeyPair, Signature};
 use serde::{Deserialize, Serialize};
-use crate::data_structs::signed_response::SignableData;
 use serde::de::DeserializeOwned;
 use sha2::digest::KeyInit;
 use sha2::Sha384;
+use crate::data_structs::responses::signable_data::SignableData;
 
 const ED25519_KEY_SIZE: usize = 48;
 

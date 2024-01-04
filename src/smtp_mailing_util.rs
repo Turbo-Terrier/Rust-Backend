@@ -2,10 +2,10 @@ use lettre::{Message, SmtpTransport, Transport};
 use lettre::message::{MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::PoolConfig;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
-#[derive(Deserialize)]
+#[derive(Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize)]
 pub struct Email {
     pub subject: String,
     pub sender_name: String,

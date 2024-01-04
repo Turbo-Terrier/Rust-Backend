@@ -3,9 +3,15 @@ use std::time::Duration;
 use rand::Rng;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
-use crate::data_structs::app_start_request::{AppCredentials, ApplicationStart, ApplicationStopped, BUCourse, DeviceMeta, SessionPing};
-use crate::data_structs::signed_response::GrantLevel;
+use crate::data_structs::app_credentials::AppCredentials;
+use crate::data_structs::device_meta;
+use crate::data_structs::device_meta::DeviceMeta;
 use crate::data_structs::user::User;
+use crate::data_structs::bu_course::BUCourse;
+use crate::data_structs::grant_level::GrantLevel;
+use crate::data_structs::requests::session_ping::SessionPing;
+use crate::data_structs::requests::application_start::ApplicationStart;
+use crate::data_structs::requests::application_stopped::ApplicationStopped;
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 
 #[derive(Debug)]
