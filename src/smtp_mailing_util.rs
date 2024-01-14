@@ -21,6 +21,8 @@ impl Email {
             mail_body
         }
     }
+	
+	// todo: add the List-unsubcribe header
     pub fn send(&self, smtp_transport: SmtpTransport, recipient: &str) {
         let email_message = Message::builder()
             .from("no-reply@aseef.dev".parse().unwrap())

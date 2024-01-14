@@ -2,7 +2,7 @@ use std::fmt::{Debug};
 use std::time::Duration;
 use rand::Rng;
 use sqlx::{Error, Executor, MySql, Pool, Row};
-use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult};
+use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult, MySqlRow};
 use crate::data_structs::app_credentials::AppCredentials;
 use crate::data_structs::device_meta;
 use crate::data_structs::device_meta::DeviceMeta;
@@ -12,21 +12,17 @@ use crate::data_structs::grant_level::GrantLevel;
 use crate::data_structs::requests::session_ping::SessionPing;
 use crate::data_structs::requests::application_start::ApplicationStart;
 use crate::data_structs::requests::application_stopped::ApplicationStopped;
+use crate::data_structs::semester::{Semester, SemesterSeason};
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
+use crate::stripe_util::StripeHandler;
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct DatabasePool {
     pool: Pool<MySql>,
     connection_url: String
 }
 impl DatabasePool {
-
-    pub fn clone(&self) -> DatabasePool {
-        DatabasePool {
-            pool: self.pool.clone(),
-            connection_url: self.connection_url.clone()
-        }
-    }
 
     pub async fn new(host: &str, port: i16, user: &str, pass: &str, database: &str) -> Self {
         let connection_url = format!("mysql://{user}:{pass}@{host}:{port}/{database}");
@@ -56,34 +52,28 @@ impl DatabasePool {
         return !result.is_empty();
     }
 
-    pub async fn get_user_grant(&self, kerberos_username: &String) -> GrantLevel {
-        let result = sqlx::query("SELECT * from users WHERE kerberos_username=?")
+    /// Returns a vector of the semester this user has premium access for
+    pub async fn get_user_grants(&self, kerberos_username: &String) -> Vec<Semester> {
+        let results = sqlx::query("SELECT * from user_grants WHERE kerberos_username=?")
             .bind(&kerberos_username)
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the get_user_grant query");
 
-        if result.is_empty() {
-            return GrantLevel::Error;
-        } else {
-            let row_res = result.get(0).unwrap();
-            // check premium status
-            let premium_since = row_res.get_unchecked::<Option<i64>, &str>("premium_since");
-            if premium_since.is_some() {
-                let premium_expiry = row_res.get_unchecked::<Option<i64>, &str>("premium_expiry").unwrap();
-                let current_time = chrono::Local::now().timestamp();
-                if current_time < premium_expiry {
-                    return GrantLevel::Full;
-                }
-            }
-            // check demo status
-            let demo_expired_at = row_res.get_unchecked::<Option<i64>, &str>("demo_expired_at");
-            return if demo_expired_at.is_none() {
-                GrantLevel::Demo
-            } else {
-                GrantLevel::Expired
+        let mut grants: Vec<Semester> = Vec::new();
+
+        if !results.is_empty() {
+            for result in results {
+                let season = result.get_unchecked::<SemesterSeason, &str>("semester_season");
+                let year = result.get_unchecked::<u16, &str>("semester_year");
+                let semester: Semester = Semester {
+                    semester_season: season,
+                    semester_year: year,
+                };
+                grants.push(semester);
             }
         }
 
+        return grants;
     }
 
     pub async fn mark_demo_over(&self, kerberos_username: &String) {
@@ -111,11 +101,11 @@ impl DatabasePool {
         return Ok("Pong!")
     }
 
-    // todo make this clearner bc the strings arent actually ever used
-    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course: BUCourse) -> Result<&str, &str> {
+
+    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course: &BUCourse) -> bool {
         // sanity check to ensure session is alive
         if !Self::is_session_alive(&self, session_id).await {
-            return Err("Session not found or is no longer alive")
+            return false;
         }
 
         sqlx::query(r#"
@@ -140,7 +130,7 @@ impl DatabasePool {
             .execute(&self.pool).await
             .expect("Error executing the mark_course_registered query");
 
-        return Ok("OK")
+        return true;
     }
 
     pub async fn end_session(&self, session_data: &ApplicationStopped) -> Result<&str, &str> {
@@ -218,42 +208,141 @@ impl DatabasePool {
         return session_id;
     }
 
-    pub async fn create_or_update_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken) -> User {
-        // generate a random authentication key using only alphabetical cased characters
-        let auth_key: String = self.generate_new_key();
-        let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
+    pub async fn get_user(&self, kerberos_username: &String) -> Option<User> {
+        let result: Vec<MySqlRow> = sqlx::query("SELECT * from users WHERE kerberos_username=?")
+            .bind(kerberos_username)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the get_user query");
+
+        if result.is_empty() {
+            return None;
+        } else {
+            let row = result.get(0).unwrap();
+            let stripe_id = row.get_unchecked::<String, &str>("stripe_id");
+            let grants = self.get_user_grants(&kerberos_username.to_string()).await;
+            let user = User {
+                kerberos_username: kerberos_username.to_string(),
+                stripe_id: stripe_id.as_str().parse().unwrap(),
+                given_name: row.get_unchecked::<String, &str>("given_name"),
+                family_name: row.get_unchecked::<String, &str>("family_name"),
+                authentication_key: row.get_unchecked::<String, &str>("authentication_key"),
+                profile_image_url: row.get_unchecked::<String, &str>("profile_image_url"),
+                demo_expired_at: row.get_unchecked::<Option<i64>, &str>("demo_expired_at"),
+                grants: grants,
+                registration_timestamp: row.get_unchecked::<i64, &str>("registration_timestamp")
+            };
+            return Option::from(user);
+        }
+    }
+
+    /// Creates a new user in the database and on stripe if they don't already exist, or updates their info if they do
+    /// Returns the user object and a bool indicating whether or not a new user was created
+    pub async fn create_or_update_user(&self, user_info: &GoogleUserInfo, google_access_token: &GoogleAccessToken, stripe_handler: &StripeHandler) -> User {
 
         let registration_timestamp = chrono::Local::now().timestamp();
-        let user = User {
-            kerberos_username: kerberos_username.to_string(),
-            given_name: user_info.given_name.clone(),
-            family_name: user_info.family_name.clone(),
-            authentication_key: auth_key,
-            profile_image_url: user_info.picture.clone(),
-            demo_expired_at: None,
-            premium_since: None,
-            premium_expiry: None,
-            registration_timestamp: registration_timestamp
-        };
+        let kerberos_username: &str = user_info.email.split("@").collect::<Vec<&str>>()[0];
 
-        sqlx::query(r#"
+        // first check if this user already exists
+        let result: Vec<MySqlRow> = sqlx::query("SELECT * from users WHERE kerberos_username=?")
+            .bind(kerberos_username)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the create_or_update_user query");
+
+        // if this user already exists, update the user in db and on stripe and return
+        if !result.is_empty() {
+
+            // first load the user as is directly from the database
+            let row: &MySqlRow = result.get(0).unwrap();
+            let stripe_id = row.get_unchecked::<String, &str>("stripe_id");
+            let grants = self.get_user_grants(&kerberos_username.to_string()).await;
+            let mut user = User {
+                kerberos_username: kerberos_username.to_string(),
+                stripe_id: stripe_id.as_str().parse().unwrap(),
+                given_name: row.get_unchecked::<String, &str>("given_name"),
+                family_name: row.get_unchecked::<String, &str>("family_name"),
+                authentication_key: row.get_unchecked::<String, &str>("authentication_key"),
+                profile_image_url: row.get_unchecked::<String, &str>("profile_image_url"),
+                demo_expired_at: row.get_unchecked::<Option<i64>, &str>("demo_expired_at"),
+                grants: grants,
+                registration_timestamp: row.get_unchecked::<i64, &str>("registration_timestamp")
+            };
+
+            // if any of the fields that can change have changed, update the user and the db and stripe
+            if user.given_name != user_info.given_name || user.family_name != user_info.family_name || user.profile_image_url != user_info.picture {
+
+                let name_changed = user.given_name != user_info.given_name || user.family_name != user_info.family_name;
+
+                // update the user object
+                user.given_name = user_info.given_name.clone();
+                user.family_name = user_info.family_name.clone();
+                user.profile_image_url = user_info.picture.clone();
+
+                // now update the db
+                sqlx::query(r#"
+                    UPDATE users
+                    SET given_name=?, family_name=?, profile_image_url=?
+                    WHERE kerberos_username=?
+                "#)
+                    .bind(&user.given_name)
+                    .bind(&user.family_name)
+                    .bind(&user.profile_image_url)
+                    .bind(&user.kerberos_username)
+                    .execute(&self.pool).await
+                    .expect("Error executing the create_or_update_user query");
+
+                // update the updated user on stripe if their name changes
+                // since thats the only thing on stripe that can change
+                if name_changed {
+                    stripe_handler.update_stripe_customer(&user).await;
+                }
+            }
+
+            return user; //finally return
+        }
+        else {
+            // else this user doesn't exist, so we create them
+
+            // first we create the user on stripe
+            let customer_id = stripe_handler.create_new_stripe_customer(
+                user_info.name.as_str(),
+                user_info.email.as_str()
+            ).await;
+
+            // generate a random authentication key using only alphabetical cased characters
+            let auth_key: String = self.generate_new_key();
+
+            sqlx::query(r#"
                 INSERT INTO users
-                    (kerberos_username, given_name, family_name, profile_image_url,
+                    (kerberos_username, stripe_id, given_name, family_name, profile_image_url,
                     authentication_key, registration_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
-                    given_name = VALUES(given_name),
-                    family_name = VALUES(family_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             "#)
-            .bind(&user.kerberos_username)
-            .bind(&user.given_name)
-            .bind(&user.family_name)
-            .bind(&user.profile_image_url)
-            .bind(&user.authentication_key)
-            .bind(&user.registration_timestamp)
-            .execute(&self.pool).await
-            .expect("Error executing the create_user query");
+                .bind(kerberos_username)
+                .bind(customer_id.as_str())
+                .bind(&user_info.given_name)
+                .bind(&user_info.family_name)
+                .bind(&user_info.picture)
+                .bind(&auth_key)
+                .bind(registration_timestamp)
+                .execute(&self.pool).await
+                .expect("Error executing the create_user query");
 
-        return user
+            // now create the user object
+            let user = User {
+                kerberos_username: kerberos_username.to_string(),
+                stripe_id: customer_id,
+                given_name: user_info.given_name.clone(),
+                family_name: user_info.family_name.clone(),
+                authentication_key: auth_key,
+                profile_image_url: user_info.picture.clone(),
+                demo_expired_at: None,  // all new users get a demo
+                grants: Vec::new(),  // naturally new users not no grants
+                registration_timestamp: registration_timestamp
+            };
+
+            return user
+        }
+
     }
 
     pub async fn reset_authentication_key(&self, kerberos_username: &String) -> String {
@@ -332,7 +421,7 @@ impl DatabasePool {
         }
     }
 
-    pub async fn has_active_session(&self, kerberos_username: &str) -> Option<DeviceMeta> {
+    pub async fn has_active_session(&self, kerberos_username: &String) -> Option<DeviceMeta> {
         let result = sqlx::query("SELECT * from application_launch_session WHERE kerberos_username=? AND is_active=1")
             .bind(kerberos_username)
             .fetch_all(&self.pool).await
@@ -361,19 +450,36 @@ impl DatabasePool {
             .expect("An error occurred create the 'session_courses' table");
         Self::create_session_end_table(&self).await
             .expect("An error occurred create the 'application_terminate_session' table");
+        Self::create_user_grants_table(&self).await
+            .expect("An error occurred create the 'user_grants' table");
+    }
+
+    async fn create_user_grants_table(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists user_grants
+            (
+                kerberos_username varchar(64)                                   not null
+                    references users (kerberos_username),
+                semester_season   enum ('Summer1', 'Summer2', 'Fall', 'Spring') not null,
+                semester_year     smallint                                      not null,
+                amount_paid       int default 0                                 not null,
+                coupons           varchar(32)                                   null,
+                granted_timestamp bigint                                        not null,
+                primary key (kerberos_username, semester_season, semester_year)
+            );
+        "#).await
     }
 
     async fn create_user_table(&self) -> Result<MySqlQueryResult, Error> {
         self.pool.execute(r#"
         create table if not exists users (
             kerberos_username      varchar(64)                                   not null,
+            stripe_id              varchar(32)                                   not null,
             given_name             varchar(128)                                  not null,
             family_name            varchar(128)                                  not null,
             profile_image_url      varchar(256)                                  null,
             authentication_key     varchar(64)                                   not null,
             demo_expired_at        bigint                                        null,
-            premium_since          bigint                                        null,
-            premium_expiry         bigint                                        null,
             registration_timestamp bigint      default unix_timestamp()          not null,
             PRIMARY KEY (kerberos_username),
             UNIQUE KEY (authentication_key)
@@ -392,7 +498,7 @@ impl DatabasePool {
             system_arch        varchar(32)                               null,
             device_cores       smallint                                  null,
             device_clock_speed float                                     null,
-            grant_type         enum('Full', 'Demo', 'Expired', 'Error')  not null,
+            grant_type         enum('Full', 'Partial', 'Demo', 'Expired', 'Error')  not null,
             launch_time        bigint                                    not null,
             is_active          tinyint(1)                                default 1 not null,
             last_ping          bigint default unix_timestamp()           not null,

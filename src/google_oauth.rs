@@ -37,6 +37,7 @@ pub struct GoogleAuthCode {
 
 #[derive(Deserialize)]
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct GoogleClientSecret {
     pub client_id: String,
     pub project_id: String,
@@ -50,7 +51,7 @@ pub struct GoogleClientSecret {
 impl GoogleClientSecret {
 
     pub fn create_oauth_uri(&self) -> String {
-        let mut uri = format!("{}?redirect_uri={}&prompt=consent&response_type=code&client_id={}&scope={}&access_type=offline",
+        let uri = format!("{}?redirect_uri={}&prompt=consent&response_type=code&client_id={}&scope={}&access_type=offline",
                               self.auth_uri,
                               self.redirect_uris[1],
                               self.client_id,
@@ -100,18 +101,4 @@ impl GoogleClientSecret {
 #[derive(Debug)]
 pub struct GoogleClientSecretWrapper {
     pub web: GoogleClientSecret,
-}
-
-impl Clone for GoogleClientSecret {
-    fn clone(&self) -> Self {
-        return GoogleClientSecret {
-            client_id: self.client_id.clone(),
-            project_id: self.project_id.clone(),
-            auth_uri: self.auth_uri.clone(),
-            token_uri: self.token_uri.clone(),
-            auth_provider_x509_cert_url: self.auth_provider_x509_cert_url.clone(),
-            client_secret: self.client_secret.clone(),
-            redirect_uris: self.redirect_uris.clone(),
-        }
-    }
 }

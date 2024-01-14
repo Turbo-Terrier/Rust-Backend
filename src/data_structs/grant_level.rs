@@ -5,6 +5,7 @@ use sqlx::Decode;
 #[derive(Deserialize, Serialize, Decode)]
 pub enum GrantLevel {
     Full,
+    Partial,
     Demo,
     Expired,
     Error
@@ -17,6 +18,7 @@ impl GrantLevel {
     pub fn as_str(&self) -> &str {
         match self {
             GrantLevel::Full => "Full",
+            GrantLevel::Partial => "Partial",
             GrantLevel::Demo => "Demo",
             GrantLevel::Expired => "Expired",
             GrantLevel::Error => "Error"

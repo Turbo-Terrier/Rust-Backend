@@ -18,16 +18,9 @@ pub struct Ed25519SecretKey {
     private_key: Ed25519KeyPair,
 }
 
+#[derive(Clone)]
 pub struct JWTSecretKey {
     pub secret_key: String,
-}
-
-impl Clone for JWTSecretKey {
-    fn clone(&self) -> Self {
-        return JWTSecretKey {
-            secret_key: self.secret_key.clone()
-        }
-    }
 }
 
 impl JWTSecretKey {
@@ -49,11 +42,11 @@ impl JWTSecretKey {
         return token;
     }
 
-    pub fn decrypt_jwt_token<T>(&self, str_token: &str) -> Token<Header, T, Verified>
+    pub fn decrypt_jwt_token<T>(&self, str_token: &str) -> Option<Token<Header, T, Verified>>
             where T: DeserializeOwned, T: Clone {
         let key: Hmac<Sha384> = Hmac::new_from_slice(self.secret_key.as_bytes()).unwrap();
-        let token: Token<Header, T, Verified> = str_token.verify_with_key(&key).unwrap();
-        return token
+        let token: Result<Token<Header, T, Verified>, jwt::Error> = str_token.verify_with_key(&key);
+        return token.ok();
     }
 
 }

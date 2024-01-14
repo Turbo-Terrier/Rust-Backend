@@ -29,6 +29,7 @@ pub mod data_structs {
 pub mod api {
     pub mod app_api;
     pub mod web_api;
+    pub mod stripe_hook;
 }
 
 
@@ -36,8 +37,9 @@ use std::fs::File;
 use database::DatabasePool;
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
+use actix_cors::Cors;
 use yaml_rust::{Yaml, YamlLoader};
-use actix_web::{App, Handler, HttpServer, Responder, web};
+use actix_web::{App, Handler, http, HttpServer, middleware, Responder, web};
 use actix_web::middleware::Logger;
 use actix_web::rt::time;
 use env_logger::Env;
@@ -45,32 +47,27 @@ use futures::FutureExt;
 use lettre::SmtpTransport;
 use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
+use stripe::Client;
 use untrusted::{self};
 use api::app_api;
 use encrypted_signing::Ed25519SecretKey;
 use google_oauth::GoogleClientSecretWrapper;
 use api::web_api;
+use crate::api::stripe_hook;
+use crate::data_structs::semester::Semester;
 use crate::encrypted_signing::JWTSecretKey;
 use crate::google_oauth::GoogleClientSecret;
+use crate::stripe_util::StripeHandler;
 
+#[derive(Clone)]
 pub struct SharedResources {
     private_key: Ed25519SecretKey,
     database: DatabasePool,
     smtp_transport: SmtpTransport,
     google_client_secret: GoogleClientSecret,
     jwt_secret: JWTSecretKey,
-}
-
-impl Clone for SharedResources {
-    fn clone(&self) -> Self {
-        return SharedResources {
-            private_key: self.private_key.clone(),
-            database: self.database.clone(),
-            smtp_transport: self.smtp_transport.clone(),
-            google_client_secret: self.google_client_secret.clone(),
-            jwt_secret: self.jwt_secret.clone(),
-        }
-    }
+    base_url: String,
+    stripe_handler: StripeHandler,
 }
 
 pub fn read_file_as_str(file_path: &str) -> String {
@@ -87,6 +84,9 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     let mut buf: String = read_file_as_str("config.yml");
     let config: Vec<Yaml> = YamlLoader::load_from_str(&mut buf).expect("Error loading yml file");
     let config: &Yaml = &config[0];
+
+    let base_url: &str = config["base-url"].as_str().expect("base-url not found!");
+    let base_url: String = base_url.to_string();
 
     println!("Connecting to the database...");
 
@@ -118,23 +118,37 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     let jwt_secret: JWTSecretKey = JWTSecretKey::new(jwt_secret.to_string());
 
     println!("Loading SMTP configuration");
-    let smtp_config = &config["smtp"];
-    let smtp_host = smtp_config["host"].as_str().expect("smtp.host not found!");
-    let smtp_port = smtp_config["port"].as_i64().expect("smtp.port not found!") as u16;
-    let smtp_username = smtp_config["username"].as_str().expect("smtp.username not found!");
-    let smtp_password = smtp_config["password"].as_str().expect("smtp.password not found!");
+    let smtp_config: &Yaml = &config["smtp"];
+    let smtp_host: &str = smtp_config["host"].as_str().expect("smtp.host not found!");
+    let smtp_port: u16 = smtp_config["port"].as_i64().expect("smtp.port not found!") as u16;
+    let smtp_username: &str = smtp_config["username"].as_str().expect("smtp.username not found!");
+    let smtp_password: &str = smtp_config["password"].as_str().expect("smtp.password not found!");
     let smtp_transport = smtp_mailing_util::create_smtp_transport(smtp_host, smtp_port, smtp_username, smtp_password);
+
+    println!("Loading Stripe configurations");
+    let stripe_config: &Yaml = &config["stripe"];
+    let stripe_secret: &str = stripe_config["secret-key"].as_str().expect("stripe.secret-key not found!");
+    let stripe_webhook_secret: &str = stripe_config["webhook-signing-secret"].as_str().expect("stripe.webhook-signing-secret not found!");
+    let base_price_regular: i64  = stripe_config["normal-session-base-price"].as_i64().expect("stripe.summer-session-base-price not found!");
+    let base_price_summer: i64 = stripe_config["summer-session-base-price"].as_i64().expect("stripe.summer-session-base-price not found!");
+    let stripe_handler = StripeHandler::new(stripe_secret.to_string(), stripe_webhook_secret.to_string(), base_price_regular, base_price_summer);
 
     let shared_resources = SharedResources {
         private_key,
         database,
         smtp_transport,
         google_client_secret,
-        jwt_secret
+        jwt_secret,
+        base_url,
+        stripe_handler
     };
+
+    shared_resources.stripe_handler.create_or_get_products(&shared_resources).await;
 
     return Ok(shared_resources);
 }
+
+// todo: Vonage API for voice alerts.
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -163,7 +177,11 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::Data::new(shared_resources.clone()))
             .wrap(Logger::new("%a \"%r\" %s %b \"%{User-Agent}i\" %T"))
-            .service(web::scope("/api/app/v1",)
+            // Enable CORS
+            .wrap(
+                Cors::permissive()
+            )
+            .service(web::scope("/api/app/v1")
                 .service(app_api::app_start)
                 .service(app_api::app_stop)
                 .service(app_api::send_mail)
@@ -177,6 +195,12 @@ async fn main() -> std::io::Result<()> {
                 .service(web_api::oauth_url)
                 .service(web_api::profile_info)
                 .service(web_api::reset_app_token)
+                .service(web_api::test_web_auth)
+                .service(web_api::create_checkout_session)
+                .service(web_api::payment_status)
+            )
+            .service(web::scope("/api/stripe/v1")
+                .service(stripe_hook::webhook_handler)
             )
     })
         .bind(("0.0.0.0", 8080))?
