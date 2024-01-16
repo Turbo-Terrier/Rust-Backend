@@ -59,16 +59,12 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
     let user = database.get_user(&start_data.credentials.kerberos_username).await.unwrap();
 
     let grant_type = {
-        if user.grants.is_empty() && user.demo_expired_at.is_some() {
+        if user.current_credits == 0 && user.demo_expired_at.is_some() {
             GrantLevel::Expired
-        } else if user.grants.is_empty() {
+        } else if user.current_credits == 0 {
             GrantLevel::Demo
-        } else if (&start_data.target_courses).into_iter().all(|course: &BUCourse| {
-            user.grants.contains(&course.semester)
-        }) {
-            GrantLevel::Full
         } else {
-            GrantLevel::Partial
+            GrantLevel::Full //todo: redo with credits now
         }
     };
 
@@ -174,9 +170,7 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
                 // first if this is a demo user, mark demo over
                 if user.demo_expired_at.is_none() {
                     database.mark_demo_over(&reg_notif_data.credentials.kerberos_username).await;
-                } else {
-                    assert!(user.grants.contains(&reg_notif_data.course.semester)); // sanity check
-                }
+                } //todo: take away credit
 
                 let response = StatusResponse::new(
                     reg_notif_data.credentials.kerberos_username,

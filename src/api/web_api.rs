@@ -3,10 +3,12 @@ use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
 use actix_web::cookie::Cookie;
 use actix_web::http::header;
 use actix_web::web::Redirect;
-use stripe::{PriceId, Product};
+use serde::Deserialize;
+use stripe::{CheckoutSession, PriceId, Product};
 use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAuthCode, GoogleClientSecret};
 use crate::{SharedResources, stripe_util};
+use crate::data_structs::app_config::UserApplicationSettings;
 use crate::data_structs::responses::web_register_response::{WebRegisterResponse};
 
 #[get("/ping")]
@@ -21,12 +23,14 @@ async fn oauth_register(data: web::Data<SharedResources>, info: web::Json<Google
     let database = &data.get_ref().database;
     let jwt_secret = &data.get_ref().jwt_secret;
     let stripe_handler = &data.get_ref().stripe_handler;
-    let base_url = &data.get_ref().base_url;
 
     let code = &info.code;
     // just to test that the server is running
     let access_token = client_secrets.get_access_token(code).await; //todo error handling for wrong code
     let user_info = client_secrets.get_user_info(access_token.access_token.as_str()).await;
+
+    // todo: if /register happens multiple times before first call finishes error happen
+    // mutex needed
 
     let user = database.create_or_update_user(&user_info, &access_token, &stripe_handler).await;
     let jwt_user_token = jwt_secret.encrypt_jwt_token(user);
@@ -108,16 +112,13 @@ async fn reset_app_token(data: web::Data<SharedResources>, req: HttpRequest) -> 
         });
 }
 
+#[derive(Deserialize)]
+struct Quantity(u64);
 #[post("/create-checkout-session")]
-pub async fn create_checkout_session(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
+pub async fn create_checkout_session(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<Quantity>) -> impl Responder {
     let jwt_secret = &data.get_ref().jwt_secret;
-    let database = &data.get_ref().database;
     let stripe_handler = &data.get_ref().stripe_handler;
     let auth_header = req.headers().get("Authorization");
-
-    // let price: Expandable<Price> = product.default_price.unwrap();
-    //         let price_id = &price.as_object().unwrap().id;
-    let target_product: PriceId = "TODO".parse().unwrap(); //todo
 
     if auth_header.is_none() {
         return HttpResponse::Unauthorized().json("No authorization key supplied");
@@ -130,25 +131,93 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
         return HttpResponse::Unauthorized().json("Invalid");
     }
 
+    let quantity = info.into_inner().0;
     let user = user.unwrap().claims().to_owned();
 
-    let checkout_session = stripe_handler.create_stripe_checkout_session(
+    let checkout_session: CheckoutSession = stripe_handler.create_stripe_checkout_session(
         &data.get_ref().base_url,
         user.stripe_id.as_str().parse().unwrap(),
-        &target_product
+        quantity,
+        stripe_handler.get_unit_price(quantity)
     ).await;
 
-    HttpResponse::Ok().json(checkout_session) //todo maybe just return url?
+    HttpResponse::Ok().json(checkout_session.url)
 }
+
+#[post("/user-app-settings")]
+pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<UserApplicationSettings>) -> impl Responder {
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let token = user.unwrap();
+    let user = token.claims();
+    let settings = info.into_inner();
+    database.create_or_update_user_application_settings(&user.kerberos_username, &settings).await;
+    println!("{:#?}", &settings);
+
+    return HttpResponse::Ok().finish();
+}
+
+#[get("/user-app-settings")]
+pub async fn get_user_app_settings(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let token = user.unwrap();
+    let user = token.claims();
+    let settings = match database.get_user_application_settings(&user.kerberos_username).await {
+        Some(settings) => settings,
+        None => UserApplicationSettings::default()
+    };
+
+    return HttpResponse::Ok()
+        .json(settings);
+}
+
 
 #[post("/contact-request")]
 pub async fn contact_request(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
-        .json("None")
+        .json("None") //todo finish
+}
+
+#[get("/pricing")]
+pub async fn pricing(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
+    let pricing = data.stripe_handler.get_tiered_prices();
+    HttpResponse::Ok().json(pricing)
 }
 
 #[get("/payment/{status}")]  //todo: actually on second thought this should route back to the portal page or whatever
 pub async fn payment_status(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .json("None")
+}
+
+#[get("/subscribe-user")]
+pub async fn subscribe_user_events(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
+    HttpResponse::Ok().json("pricing")
 }

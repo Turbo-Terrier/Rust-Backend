@@ -4,10 +4,10 @@ use std::str::FromStr;
 use std::string::ParseError;
 use chrono::{Datelike, Duration, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
-use sqlx::Decode;
+use sqlx::{Decode, Row};
 
 #[derive(Debug, PartialEq, Eq)]
-#[derive(Deserialize, Serialize, Decode)]
+#[derive(Deserialize, Serialize, sqlx::Type)]
 #[derive(Clone)]
 pub enum SemesterSeason {
     Summer1,
@@ -181,6 +181,13 @@ impl Semester {
         } else {
             return Semester::get_next_semester(&Semester::get_next_semester(&Semester::get_current_semester().unwrap()));
         }
+    }
+
+    pub fn decode(row: &sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        Ok(Semester {
+            semester_season: row.try_get::<SemesterSeason, &str>("semester_season")?,
+            semester_year: row.try_get("semester_year")?,
+        })
     }
 
 }

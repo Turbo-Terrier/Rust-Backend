@@ -11,6 +11,7 @@ pub mod data_structs {
     pub mod app_credentials;
     pub mod bu_course;
     pub mod grant_level;
+    pub mod app_config;
     pub mod requests {
         pub mod application_start;
         pub mod application_stopped;
@@ -49,6 +50,7 @@ use sqlx::{Database, Executor};
 use ring::signature::KeyPair;
 use stripe::Client;
 use untrusted::{self};
+use yaml_rust::yaml::Array;
 use api::app_api;
 use encrypted_signing::Ed25519SecretKey;
 use google_oauth::GoogleClientSecretWrapper;
@@ -57,7 +59,7 @@ use crate::api::stripe_hook;
 use crate::data_structs::semester::Semester;
 use crate::encrypted_signing::JWTSecretKey;
 use crate::google_oauth::GoogleClientSecret;
-use crate::stripe_util::StripeHandler;
+use crate::stripe_util::{StripeHandler, TieredPrice};
 
 #[derive(Clone)]
 pub struct SharedResources {
@@ -129,9 +131,15 @@ async fn load() -> Result<SharedResources, std::io::Error> {
     let stripe_config: &Yaml = &config["stripe"];
     let stripe_secret: &str = stripe_config["secret-key"].as_str().expect("stripe.secret-key not found!");
     let stripe_webhook_secret: &str = stripe_config["webhook-signing-secret"].as_str().expect("stripe.webhook-signing-secret not found!");
-    let base_price_regular: i64  = stripe_config["normal-session-base-price"].as_i64().expect("stripe.summer-session-base-price not found!");
-    let base_price_summer: i64 = stripe_config["summer-session-base-price"].as_i64().expect("stripe.summer-session-base-price not found!");
-    let stripe_handler = StripeHandler::new(stripe_secret.to_string(), stripe_webhook_secret.to_string(), base_price_regular, base_price_summer);
+    let product_id: &str = stripe_config["product-id"].as_str().expect("stripe.product-id not found!");
+    let tiered_pricing: &Array = stripe_config["pricing"].as_vec().expect("stripe.pricing not found!");
+    let tiered_pricing: Vec<TieredPrice> = tiered_pricing.into_iter().map(|price| {
+        let required_quantity = price["required-quantity"].as_i64().expect("stripe.pricing.required-quantity not found!");
+        let price = price["unit-price"].as_f64().expect("stripe.pricing.unit-price not found!");
+        TieredPrice::new(required_quantity as u64, price)
+    }).collect();
+    assert_ne!(tiered_pricing.len(), 0, "stripe.pricing must have at least 1 pricing!");
+    let stripe_handler = StripeHandler::new(stripe_secret.to_string(), stripe_webhook_secret.to_string(), product_id.parse().unwrap(), tiered_pricing);
 
     let shared_resources = SharedResources {
         private_key,
@@ -142,9 +150,7 @@ async fn load() -> Result<SharedResources, std::io::Error> {
         base_url,
         stripe_handler
     };
-
-    shared_resources.stripe_handler.create_or_get_products(&shared_resources).await;
-
+    // todo: add a referral program
     return Ok(shared_resources);
 }
 
@@ -195,7 +201,10 @@ async fn main() -> std::io::Result<()> {
                 .service(web_api::oauth_url)
                 .service(web_api::profile_info)
                 .service(web_api::reset_app_token)
-                .service(web_api::test_web_auth)
+                .service(web_api::update_user_app_settings)
+                .service(web_api::get_user_app_settings)
+                .service(web_api::payment_status)
+                .service(web_api::pricing)
                 .service(web_api::create_checkout_session)
                 .service(web_api::payment_status)
             )

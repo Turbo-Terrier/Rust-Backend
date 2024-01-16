@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use stripe::CustomerId;
-use crate::data_structs::semester::Semester;
 
 #[derive(Debug, PartialEq)]
 #[derive(Serialize, Deserialize)]
@@ -12,7 +11,7 @@ pub struct User {
     pub family_name: String,
     pub authentication_key: String,
     pub profile_image_url: String,
+    pub current_credits: i64,
     pub demo_expired_at: Option<i64>,
-    pub grants: Vec<Semester>,
     pub registration_timestamp: i64
 }

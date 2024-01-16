@@ -1,6 +1,7 @@
 use std::process::exit;
 use std::str::FromStr;
-use stripe::{CheckoutSession, CheckoutSessionMode, Client, Coupon, CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCoupon, CreateCouponAppliesTo, CreateCustomer, CreatePrice, CreateProduct, CreateProductDefaultPriceData, Currency, Customer, CustomerId, Expandable, ListProducts, Price, PriceId, Product, ProductId, PromotionCode, PromotionCodeCurrencyOption, Timestamp, UpdateCustomer, UpdateProduct};
+use serde::Serialize;
+use stripe::{CheckoutSession, CheckoutSessionMode, Client, Coupon, CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData, CreateCoupon, CreateCouponAppliesTo, CreateCustomer, CreatePrice, CreateProduct, CreateProductDefaultPriceData, Currency, Customer, CustomerId, Expandable, ListProducts, Price, PriceId, Product, ProductId, PromotionCode, PromotionCodeCurrencyOption, Timestamp, UpdateCustomer, UpdateProduct};
 use crate::data_structs::semester::Semester;
 use crate::data_structs::user::User;
 use crate::SharedResources;
@@ -9,8 +10,23 @@ pub struct StripeHandler {
     stripe_secret_key: String,
     webhook_signing_secret: String,
     stripe_client: Client,
-    regular_base_price: i64,
-    summer_base_price: i64
+    product_id: ProductId,
+    tiered_prices: Vec<TieredPrice>
+}
+
+#[derive(Clone, Serialize)]
+pub struct TieredPrice {
+    required_quantity: u64,
+    unit_price: f64
+}
+
+impl TieredPrice {
+    pub fn new(required_quantity: u64, unit_price: f64) -> TieredPrice {
+        return TieredPrice {
+            required_quantity,
+            unit_price
+        };
+    }
 }
 
 impl Clone for StripeHandler {
@@ -19,22 +35,43 @@ impl Clone for StripeHandler {
             stripe_secret_key: self.stripe_secret_key.clone(),
             webhook_signing_secret: self.webhook_signing_secret.to_string(),
             stripe_client: Client::new(self.stripe_secret_key.clone()),
-            regular_base_price: self.regular_base_price,
-            summer_base_price: self.summer_base_price,
+            product_id: self.product_id.clone(),
+            tiered_prices: self.tiered_prices.clone()
         }
     }
 }
 
 impl StripeHandler {
 
-    pub fn new(stripe_secret_key: String, webhook_signing_secret: String, regular_base_price: i64, summer_base_price: i64) -> StripeHandler {
-        return StripeHandler {
+    pub fn new(stripe_secret_key: String, webhook_signing_secret: String, product_id: ProductId, tiered_prices: Vec<TieredPrice>) -> StripeHandler {
+        let mut handler =  StripeHandler {
             stripe_secret_key: stripe_secret_key.to_owned(),
-            webhook_signing_secret: webhook_signing_secret.to_owned(),
+            webhook_signing_secret,
             stripe_client: Client::new(stripe_secret_key.to_owned()),
-            regular_base_price: regular_base_price,
-            summer_base_price: summer_base_price,
+            product_id,
+            tiered_prices
+        };
+        handler.tiered_prices.sort_by(|a, b| a.required_quantity.cmp(&b.required_quantity));
+        handler
+    }
+
+    pub fn get_tiered_prices(&self) -> &Vec<TieredPrice> {
+        return &self.tiered_prices;
+    }
+
+    pub fn get_unit_price(&self, quantity: u64) -> f64 {
+        let mut price: f64 = -1.0;
+        for tiered_price in &self.tiered_prices {
+            if quantity >= tiered_price.required_quantity {
+                price = tiered_price.unit_price
+            }
         }
+        if price == -1.0 && self.tiered_prices.len() > 0 {
+            price = self.tiered_prices[self.tiered_prices.len() - 1].unit_price;
+        }
+        assert_ne!(price, -1.0, "Error, unable to figure out the price!"); // should never happen
+
+        return price;
     }
 
     pub fn get_webhook_signing_secret(&self) -> String {
@@ -75,96 +112,7 @@ impl StripeHandler {
         return customer.id;
     }
 
-
-    //todo : rm
-	// https://github.com/arlyon/async-stripe/blob/master/examples
-    pub async fn create_or_get_products(&self, shared_resources: &SharedResources) -> Vec<Product> {
-
-        let normal_base_price = shared_resources.stripe_handler.regular_base_price;
-        let summer_base_price = shared_resources.stripe_handler.summer_base_price;
-
-        let mut semesters_to_sell: Vec<String> = Semester::get_current_and_upcoming_semesters()
-            .into_iter().map(| sem: Semester | sem.to_string()).collect();
-
-        let mut added_semesters: Vec<String> = Vec::new();
-
-        let mut products = Product::list(
-            &self.stripe_client,
-            &Default::default()
-        ).await.unwrap().data;
-
-        for product in &products {
-            if product.active.unwrap() && semesters_to_sell.contains(&product.name.clone().unwrap()) {
-                added_semesters.push(product.name.clone().unwrap());
-            } else {
-                // deactivate otherwise
-                Product::update(&self.stripe_client, &product.id, UpdateProduct {
-                    active: Option::from(false),
-                    ..Default::default()
-                }).await.expect("Error updating product!");
-            }
-        };
-
-        let mut redirect_url = shared_resources.base_url.clone();
-        redirect_url.push_str("/api/web/v1/payment-status");
-        for semester in semesters_to_sell {
-            if !added_semesters.contains(&semester) {
-
-                let base_price = {
-                    let semester: Semester = match Semester::from_str(semester.as_str()) {
-                        Ok(semester) => semester,
-                        Err(e) => {
-                            eprintln!("Error parsing semester {}: {}", semester, e);
-                            continue;
-                        }
-                    };
-                    if semester.semester_season.is_summer_session() {
-                        normal_base_price.clone()
-                    } else {
-                        summer_base_price.clone()
-                    }
-                };
-
-                println!("{:#?}", Option::from(("TT: ".to_string() + &semester.to_string()).as_str())); //todo remove
-                let product = Product::create(
-                    &self.stripe_client,
-                    CreateProduct {
-                        active: None,
-                        default_price_data: Option::from(
-                            CreateProductDefaultPriceData {
-                                currency: Currency::USD,
-                                unit_amount: Option::from(base_price),
-                                ..Default::default()
-                            }
-                        ),
-                        description: Option::from(
-                            ("Purchase unlimited premium access to the Turbo Terrier app for any registrations ".to_string() +
-                                "for the " + &semester.to_string() + " semester.").as_str()
-                        ),
-                        expand: &[],
-                        id: None,
-                        images: None,
-                        metadata: None,
-                        name: semester.to_string().as_str(),
-                        package_dimensions: None,
-                        shippable: None,
-                        statement_descriptor: Option::from(("TT: ".to_string() + &semester.to_string()).as_str()),
-                        tax_code: None,
-                        type_: None,
-                        unit_label: None,
-                        url: None,
-                    }
-                ).await.unwrap();
-
-                products.push(product);
-            }
-        }
-
-        //todo sort by semester
-        products
-    }
-
-    pub async fn create_stripe_checkout_session(&self, base_url: &String, customer: CustomerId, product_price_id: &PriceId) -> CheckoutSession {
+    pub async fn create_stripe_checkout_session(&self, base_url: &String, customer: CustomerId, quantity: u64, unit_price: f64) -> CheckoutSession {
 
         let redirect_url_success = format!("{}/api/web/v1/payment-status/success", base_url);
         let redirect_url_failure = format!("{}/api/web/v1/payment-status/failure", base_url);
@@ -173,11 +121,17 @@ impl StripeHandler {
         checkout_session.customer = Option::from(customer);
         checkout_session.line_items = Option::from(
             vec!(CreateCheckoutSessionLineItems {
-                price: Option::from(product_price_id.to_string()), //also has product details
-                quantity: Option::from(1),
+                price_data: Option::from(CreateCheckoutSessionLineItemsPriceData {
+                    currency: Currency::USD,
+                    product: Option::from(self.product_id.to_string()),
+                    unit_amount: Option::from((unit_price * 100.0).round() as i64),
+                    ..Default::default()
+                }),
+                quantity: Option::from(quantity),
                 ..Default::default()
             })
         );
+        checkout_session.allow_promotion_codes = Option::from(true);
         checkout_session.mode = Option::from(CheckoutSessionMode::Payment);
         let checkout_session = CheckoutSession::create(&self.stripe_client, checkout_session).await.unwrap();
 

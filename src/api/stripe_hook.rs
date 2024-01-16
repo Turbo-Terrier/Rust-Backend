@@ -1,5 +1,5 @@
 use actix_web::{HttpRequest, HttpResponse, post, web};
-use stripe::{EventObject, EventType, Webhook, WebhookError};
+use stripe::{CheckoutSession, CheckoutSessionItem, CheckoutSessionItemId, CheckoutSessionPaymentStatus, EventObject, EventType, Webhook, WebhookError};
 use crate::SharedResources;
 
 #[post("webhook")]
@@ -12,14 +12,28 @@ pub async fn webhook_handler(data: web::Data<SharedResources>, req: HttpRequest,
         match event.type_ {
             EventType::CheckoutSessionCompleted => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
-                    handle_checkout_complete(data, session);
+                    handle_checkout_complete(data, session).await;
                     HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
             }
             EventType::CheckoutSessionExpired => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
-                    handle_checkout_expired(session);
+                    handle_checkout_expired(data, session).await;
+                    HttpResponse::Ok().finish();
+                }
+                return HttpResponse::BadRequest().finish();
+            }
+            EventType::CheckoutSessionAsyncPaymentSucceeded => {
+                if let EventObject::CheckoutSession(session) = event.data.object {
+                    handle_checkout_complete(data, session).await;
+                    HttpResponse::Ok().finish();
+                }
+                return HttpResponse::BadRequest().finish();
+            }
+            EventType::CheckoutSessionAsyncPaymentFailed => {
+                if let EventObject::CheckoutSession(session) = event.data.object {
+                    handle_checkout_expired(data, session).await;
                     HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
@@ -39,13 +53,24 @@ fn get_header_value<'b>(req: &'b HttpRequest, key: &'b str) -> Option<&'b str> {
     req.headers().get(key)?.to_str().ok()
 }
 
-fn handle_checkout_complete(data: web::Data<SharedResources>, session: stripe::CheckoutSession) {
-    println!("Checkout session completed: {:?}", session);
-    // todo: figure out who the customer is, and credit them
-    //  also remove demo if it isn't already removed
+async fn handle_checkout_complete(data: web::Data<SharedResources>, session: CheckoutSession) {
+    println!("Checkout session completed/paid: {:?}", session);
+    let database = &data.database;
+
+    if session.payment_status == CheckoutSessionPaymentStatus::Paid {
+        let success = database.close_purchase_session(session.id.as_str(), true, session.amount_total.map(|o| o as f64/100.0), None).await;
+        if !success {
+            eprintln!("Error, no such session id!");
+        }
+    }
 
 }
 
-fn handle_checkout_expired(session: stripe::CheckoutSession) {
-    println!("Checkout session expired: {:?}", session);
+async fn handle_checkout_expired(data: web::Data<SharedResources>, session: CheckoutSession) {
+    println!("Checkout session expired/failed: {:?}", session);
+    let database = &data.database;
+    let success = database.close_purchase_session(session.id.as_str(), false, None, None).await;
+    if !success {
+        eprintln!("Error, no such session id!");
+    }
 }

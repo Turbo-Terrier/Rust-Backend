@@ -13,8 +13,10 @@ use crate::data_structs::requests::session_ping::SessionPing;
 use crate::data_structs::requests::application_start::ApplicationStart;
 use crate::data_structs::requests::application_stopped::ApplicationStopped;
 use crate::data_structs::semester::{Semester, SemesterSeason};
+use crate::data_structs::app_config::{UserApplicationSettings};
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 use crate::stripe_util::StripeHandler;
+use stripe::CustomerId;
 
 #[derive(Debug)]
 #[derive(Clone)]
@@ -50,30 +52,6 @@ impl DatabasePool {
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the is_authenticated query");
         return !result.is_empty();
-    }
-
-    /// Returns a vector of the semester this user has premium access for
-    pub async fn get_user_grants(&self, kerberos_username: &String) -> Vec<Semester> {
-        let results = sqlx::query("SELECT * from user_grants WHERE kerberos_username=?")
-            .bind(&kerberos_username)
-            .fetch_all(&self.pool).await
-            .expect("Error fetching rows for the get_user_grant query");
-
-        let mut grants: Vec<Semester> = Vec::new();
-
-        if !results.is_empty() {
-            for result in results {
-                let season = result.get_unchecked::<SemesterSeason, &str>("semester_season");
-                let year = result.get_unchecked::<u16, &str>("semester_year");
-                let semester: Semester = Semester {
-                    semester_season: season,
-                    semester_year: year,
-                };
-                grants.push(semester);
-            }
-        }
-
-        return grants;
     }
 
     pub async fn mark_demo_over(&self, kerberos_username: &String) {
@@ -208,6 +186,7 @@ impl DatabasePool {
         return session_id;
     }
 
+    // todo figure out demo credit management...
     pub async fn get_user(&self, kerberos_username: &String) -> Option<User> {
         let result: Vec<MySqlRow> = sqlx::query("SELECT * from users WHERE kerberos_username=?")
             .bind(kerberos_username)
@@ -219,7 +198,6 @@ impl DatabasePool {
         } else {
             let row = result.get(0).unwrap();
             let stripe_id = row.get_unchecked::<String, &str>("stripe_id");
-            let grants = self.get_user_grants(&kerberos_username.to_string()).await;
             let user = User {
                 kerberos_username: kerberos_username.to_string(),
                 stripe_id: stripe_id.as_str().parse().unwrap(),
@@ -227,12 +205,78 @@ impl DatabasePool {
                 family_name: row.get_unchecked::<String, &str>("family_name"),
                 authentication_key: row.get_unchecked::<String, &str>("authentication_key"),
                 profile_image_url: row.get_unchecked::<String, &str>("profile_image_url"),
+                current_credits: row.get_unchecked::<i64, &str>("current_credits"),
                 demo_expired_at: row.get_unchecked::<Option<i64>, &str>("demo_expired_at"),
-                grants: grants,
                 registration_timestamp: row.get_unchecked::<i64, &str>("registration_timestamp")
             };
             return Option::from(user);
         }
+    }
+
+    pub async fn create_purchase_session(&self, kerberos_username: &String, quantity: u64, subtotal: f64, session_id: &str) {
+        sqlx::query(r#"
+            INSERT INTO user_purchase_sessions
+            (kerberos_username, session_id, quantity, subtotal, total,
+            coupons, succeeded, processed, begin_timestamp, finish_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#)
+            .bind(&kerberos_username)
+            .bind(&session_id)
+            .bind(&quantity)
+            .bind(&subtotal)
+            .bind(None::<f64>)
+            .bind(None::<f64>)
+            .bind(0)
+            .bind(0)
+            .bind(&chrono::Local::now().timestamp())
+            .bind(None::<i64>)
+            .execute(&self.pool).await
+            .expect("Error executing the create_purchase_session query");
+    }
+
+    pub async fn close_purchase_session(&self, session_id: &str, success: bool, total: Option<f64>, coupon: Option<String>) -> bool {
+        // get quantity
+        let result: Vec<MySqlRow> = sqlx::query("SELECT kerberos_username, quantity from user_purchase_sessions WHERE session_id=?")
+            .bind(&session_id)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the close_purchase_session query");
+
+        if !result.is_empty() {
+            let row = result.get(0).unwrap();
+            let quantity = row.get_unchecked::<i64, &str>("quantity");
+            let kerberos_username = row.get_unchecked::<String, &str>("kerberos_username");
+
+            // update
+            sqlx::query(r#"
+                UPDATE user_purchase_sessions
+                SET succeeded=?, processed=1, total=?, coupon=?, finish_timestamp=?
+                WHERE session_id=?
+            "#)
+                .bind(&success)
+                .bind(&total)
+                .bind(&chrono::Local::now().timestamp())
+                .bind(&kerberos_username)
+                .bind(&coupon)
+                .bind(&session_id)
+                .execute(&self.pool).await
+                .expect("Error executing the close_purchase_session query");
+
+            if success {
+                // add credits
+                sqlx::query("UPDATE users SET current_credits=current_credits+? WHERE kerberos_username=?")
+                    .bind(&quantity)
+                    .bind(&kerberos_username)
+                    .execute(&self.pool).await
+                    .expect("Error executing the close_purchase_session query");
+
+                // mark demo over
+                self.mark_demo_over(&kerberos_username);
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     /// Creates a new user in the database and on stripe if they don't already exist, or updates their info if they do
@@ -248,13 +292,14 @@ impl DatabasePool {
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the create_or_update_user query");
 
+        println!("CALLED!!");
+
         // if this user already exists, update the user in db and on stripe and return
         if !result.is_empty() {
 
             // first load the user as is directly from the database
             let row: &MySqlRow = result.get(0).unwrap();
             let stripe_id = row.get_unchecked::<String, &str>("stripe_id");
-            let grants = self.get_user_grants(&kerberos_username.to_string()).await;
             let mut user = User {
                 kerberos_username: kerberos_username.to_string(),
                 stripe_id: stripe_id.as_str().parse().unwrap(),
@@ -262,8 +307,8 @@ impl DatabasePool {
                 family_name: row.get_unchecked::<String, &str>("family_name"),
                 authentication_key: row.get_unchecked::<String, &str>("authentication_key"),
                 profile_image_url: row.get_unchecked::<String, &str>("profile_image_url"),
+                current_credits: row.get_unchecked::<i64, &str>("current_credits"),
                 demo_expired_at: row.get_unchecked::<Option<i64>, &str>("demo_expired_at"),
-                grants: grants,
                 registration_timestamp: row.get_unchecked::<i64, &str>("registration_timestamp")
             };
 
@@ -311,21 +356,28 @@ impl DatabasePool {
             // generate a random authentication key using only alphabetical cased characters
             let auth_key: String = self.generate_new_key();
 
+            // insert user
             sqlx::query(r#"
                 INSERT INTO users
                     (kerberos_username, stripe_id, given_name, family_name, profile_image_url,
-                    authentication_key, registration_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    current_credits, authentication_key, registration_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             "#)
                 .bind(kerberos_username)
                 .bind(customer_id.as_str())
                 .bind(&user_info.given_name)
                 .bind(&user_info.family_name)
                 .bind(&user_info.picture)
+                .bind(0)
                 .bind(&auth_key)
                 .bind(registration_timestamp)
                 .execute(&self.pool).await
                 .expect("Error executing the create_user query");
+
+            // create default settings and insert settings
+            let mut default_settings = UserApplicationSettings::default();
+            default_settings.email = Some(user_info.email.clone());
+            self.create_or_update_user_application_settings(kerberos_username, &default_settings).await;
 
             // now create the user object
             let user = User {
@@ -335,8 +387,8 @@ impl DatabasePool {
                 family_name: user_info.family_name.clone(),
                 authentication_key: auth_key,
                 profile_image_url: user_info.picture.clone(),
-                demo_expired_at: None,  // all new users get a demo
-                grants: Vec::new(),  // naturally new users not no grants
+                current_credits: 0,
+                demo_expired_at: None,  // all new users get a demo,
                 registration_timestamp: registration_timestamp
             };
 
@@ -441,6 +493,130 @@ impl DatabasePool {
         }
     }
 
+    pub async fn get_user_application_settings(&self, kerberos_username: &str) -> Option<UserApplicationSettings> {
+        let result = sqlx::query("SELECT * from user_application_settings WHERE kerberos_username=?")
+            .bind(kerberos_username)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the get_user_application_settings query");
+        if result.is_empty() {
+            return None;
+        } else {
+            let row = result.get(0).unwrap();
+            match UserApplicationSettings::decode(row) {
+                Ok(mut application_config) => {
+                    let courses = self.get_user_application_courses(kerberos_username).await;
+                    application_config.target_courses = courses;
+                    return Some(application_config);
+                },
+                Err(err) => {
+                    eprintln!("Error decoding application config: {}", err);
+                    return None;
+                }
+            }
+        }
+    }
+
+    pub async fn create_or_update_user_application_settings(&self, kerberos_username: &str, course_settings: &UserApplicationSettings) {
+        // create
+        sqlx::query(r#"
+                INSERT INTO user_application_settings
+                (kerberos_username, real_registrations, keep_trying, save_password,
+                save_duo_cookies, registration_notifications,
+                register_email_alert, register_text_alert, register_phone_alert,
+                watchdog_notifications, watchdog_email_alert, watchdog_text_alert,
+                watchdog_phone_alert, alert_phone, alert_email, console_colors,
+                custom_chrome_driver, custom_chrome_driver_path, debug_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE real_registrations=VALUES(real_registrations),
+                keep_trying=VALUES(keep_trying), save_password=VALUES(save_password),
+                save_duo_cookies=VALUES(save_duo_cookies), registration_notifications=VALUES(registration_notifications),
+                register_email_alert=VALUES(register_email_alert),
+                register_text_alert=VALUES(register_text_alert), register_phone_alert=VALUES(register_phone_alert),
+                watchdog_notifications=VALUES(watchdog_notifications), watchdog_email_alert=VALUES(watchdog_email_alert),
+                watchdog_text_alert=VALUES(watchdog_text_alert), watchdog_phone_alert=VALUES(watchdog_phone_alert),
+                alert_phone=VALUES(alert_phone), alert_email=VALUES(alert_email), console_colors=VALUES(console_colors),
+                custom_chrome_driver=VALUES(custom_chrome_driver), custom_chrome_driver_path=VALUES(custom_chrome_driver_path),
+                debug_mode=VALUES(debug_mode)
+            "#)
+            .bind(&kerberos_username)
+            .bind(&course_settings.real_registrations)
+            .bind(&course_settings.keep_trying)
+            .bind(&course_settings.save_password)
+            .bind(&course_settings.save_duo_cookies)
+            .bind(&course_settings.registration_notifications.enabled)
+            .bind(&course_settings.registration_notifications.email_alerts)
+            .bind(&course_settings.registration_notifications.text_alerts)
+            .bind(&course_settings.registration_notifications.call_alerts)
+            .bind(&course_settings.watchdog_notifications.enabled)
+            .bind(&course_settings.watchdog_notifications.email_alerts)
+            .bind(&course_settings.watchdog_notifications.text_alerts)
+            .bind(&course_settings.watchdog_notifications.call_alerts)
+            .bind(&course_settings.email)
+            .bind(&course_settings.phone)
+            .bind(&course_settings.console_colors)
+            .bind(&course_settings.custom_driver.enabled)
+            .bind(&course_settings.custom_driver.driver_path)
+            .bind(&course_settings.debug_mode)
+            .execute(&self.pool).await
+            .expect("Error executing the create_or_update_user_application_settings query");
+    }
+
+    pub async fn user_course_settings_add_course(&self, kerberos_username: &String, course: &BUCourse) {
+        sqlx::query(r#"
+                INSERT INTO user_application_course_settings
+                (kerberos_username, semester_season, semester_year, college, department, course_code, section)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+            "#)
+            .bind(&kerberos_username)
+            .bind(&course.semester.semester_season.to_string())
+            .bind(&course.semester.semester_year)
+            .bind(&course.college)
+            .bind(&course.department)
+            .bind(&course.course_code)
+            .bind(&course.section)
+            .execute(&self.pool).await
+            .expect("Error executing the user_course_settings_add_course query");
+    }
+
+    pub async fn user_course_settings_delete_course(&self, kerberos_username: &String, course: &BUCourse) {
+        sqlx::query(r#"
+                DELETE FROM user_application_course_settings
+                WHERE kerberos_username=? AND semester_season=? AND semester_year=? AND college=? AND department=? AND course_code=? AND section=?;
+            "#)
+            .bind(&kerberos_username)
+            .bind(&course.semester.semester_season.to_string())
+            .bind(&course.semester.semester_year)
+            .bind(&course.college)
+            .bind(&course.department)
+            .bind(&course.course_code)
+            .bind(&course.section)
+            .execute(&self.pool).await
+            .expect("Error executing the user_course_settings_delete_course query");
+    }
+
+    async fn get_user_application_courses(&self, kerberos_username: &str) -> Vec<BUCourse> {
+        let result = sqlx::query("SELECT * from user_application_course_settings WHERE kerberos_username=?")
+            .bind(kerberos_username)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the get_user_application_courses query");
+        if result.is_empty() {
+            return Vec::new();
+        } else {
+            let mut courses = Vec::new();
+            for row in result {
+                match BUCourse::decode(&row) {
+                    Ok(course) => {
+                        courses.push(course);
+                    },
+                    Err(err) => {
+                        eprintln!("Error decoding application course: {}", err);
+                    }
+                }
+            }
+            return courses;
+        }
+    }
+
     async fn create_tables(&self) {
         Self::create_user_table(&self).await
             .expect("An error occurred create the 'users' table");
@@ -450,22 +626,94 @@ impl DatabasePool {
             .expect("An error occurred create the 'session_courses' table");
         Self::create_session_end_table(&self).await
             .expect("An error occurred create the 'application_terminate_session' table");
-        Self::create_user_grants_table(&self).await
-            .expect("An error occurred create the 'user_grants' table");
+        Self::create_user_purchase_sessions_table(&self).await
+            .expect("An error occurred create the 'user_purchase_sessions' table");
+        Self::create_user_application_settings_table(&self).await
+            .expect("An error occurred create the 'user_application_settings' table");
+        Self::create_application_course_settings_table(&self).await
+            .expect("An error occurred create the 'user_application_course_settings' table");
+        Self::create_known_courses_table(&self).await
+            .expect("An error occurred create the 'known_courses' table");
     }
 
-    async fn create_user_grants_table(&self) -> Result<MySqlQueryResult, Error> {
+    async fn create_known_courses_table(&self) -> Result<MySqlQueryResult, Error> {
         self.pool.execute(r#"
-            create table if not exists user_grants
+            create table if not exists user_application_course_settings
+            (
+                semester_season   enum ('Summer1', 'Summer2', 'Fall', 'Spring') not null,
+                semester_year     smallint                                      not null,
+                college           varchar(6)                                    not null,
+                department        varchar(6)                                    not null,
+                course_code       smallint                                      not null,
+                section           varchar(6)                                    not null,
+                primary key (semester_season, semester_year, college, department, course_code, section)
+            );
+        "#).await
+    }
+
+    async fn create_application_course_settings_table(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists user_application_course_settings
             (
                 kerberos_username varchar(64)                                   not null
                     references users (kerberos_username),
                 semester_season   enum ('Summer1', 'Summer2', 'Fall', 'Spring') not null,
                 semester_year     smallint                                      not null,
-                amount_paid       int default 0                                 not null,
-                coupons           varchar(32)                                   null,
-                granted_timestamp bigint                                        not null,
-                primary key (kerberos_username, semester_season, semester_year)
+                college           varchar(6)                                    not null,
+                department        varchar(6)                                    not null,
+                course_code       smallint                                      not null,
+                section           varchar(6)                                    not null,
+                primary key (kerberos_username, semester_season, semester_year, college, department, course_code, section)
+            );
+        "#).await
+    }
+
+    async fn create_user_application_settings_table(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists user_application_settings
+            (
+                kerberos_username          varchar(64)  not null
+                    primary key
+                    references users (kerberos_username),
+                real_registrations         tinyint(1)   not null,
+                keep_trying                tinyint(1)   not null,
+                save_password              tinyint(1)   not null,
+                save_duo_cookies           tinyint(1)   not null,
+                registration_notifications tinyint(1)   not null,
+                register_email_alert       tinyint(1)   not null,
+                register_text_alert        tinyint(1)   not null,
+                register_phone_alert       tinyint(1)   not null,
+                watchdog_notifications     tinyint(1)   not null,
+                watchdog_email_alert       tinyint(1)   not null,
+                watchdog_text_alert        tinyint(1)   not null,
+                watchdog_phone_alert       tinyint(1)   not null,
+                alert_phone                varchar(16)  null,
+                alert_email                varchar(320) null,
+                console_colors             tinyint(1)   not null,
+                custom_chrome_driver       tinyint(1)   not null,
+                custom_chrome_driver_path  varchar(512) null,
+                debug_mode                 tinyint(1)   not null
+            );
+        "#).await
+    }
+
+    async fn create_user_purchase_sessions_table(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists user_purchase_sessions
+            (
+                kerberos_username varchar(64)                                   not null
+                    references users (kerberos_username),
+                session_id        varchar(256)                                  null,
+                quantity          int                                           not null,
+                subtotal          float                                         null,
+                total             float                                         null,
+                coupon            varchar(32)                                   null,
+                succeeded         tinyint(1)                                    not null,
+                processed         tinyint(1)                                    not null,
+                begin_timestamp   bigint                                        not null,
+                finish_timestamp  bigint                                        null,
+                primary key (kerberos_username, begin_timestamp),
+                unique key (session_id)
             );
         "#).await
     }
@@ -479,6 +727,7 @@ impl DatabasePool {
             family_name            varchar(128)                                  not null,
             profile_image_url      varchar(256)                                  null,
             authentication_key     varchar(64)                                   not null,
+            current_credits        int                                           not null,
             demo_expired_at        bigint                                        null,
             registration_timestamp bigint      default unix_timestamp()          not null,
             PRIMARY KEY (kerberos_username),
