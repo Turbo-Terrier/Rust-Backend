@@ -1,9 +1,12 @@
+use std::collections::{BTreeMap, HashMap};
+use std::iter::Map;
 use actix_web::cookie::time::Duration;
 use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
 use actix_web::cookie::Cookie;
 use actix_web::http::header;
 use actix_web::web::Redirect;
 use serde::Deserialize;
+use serde_json::Value;
 use stripe::{CheckoutSession, PriceId, Product};
 use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAuthCode, GoogleClientSecret};
@@ -145,7 +148,7 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
 }
 
 #[post("/user-app-settings")]
-pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<UserApplicationSettings>) -> impl Responder {
+pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<HashMap<String, Value>>) -> impl Responder {
     let jwt_secret = &data.get_ref().jwt_secret;
     let database = &data.get_ref().database;
     let auth_header = req.headers().get("Authorization");
@@ -163,9 +166,26 @@ pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: Htt
 
     let token = user.unwrap();
     let user = token.claims();
-    let settings = info.into_inner();
-    database.create_or_update_user_application_settings(&user.kerberos_username, &settings).await;
-    println!("{:#?}", &settings);
+
+    // get the current application settings
+    let current_settings = match database.get_user_application_settings(&user.kerberos_username).await {
+        Some(settings) => settings,
+        None => UserApplicationSettings::default()
+    };
+
+    // Update fields dynamically based on the provided JSON
+    let mut updated_settings_map = info.into_inner();
+    let json_str = serde_json::to_string(&current_settings).unwrap();
+    let mut field_map = serde_json::from_str::<HashMap<String, Value>>(json_str.as_str()).unwrap();
+    for (field, value) in updated_settings_map {
+        field_map.insert(field, value);
+    }
+    // convert back into settings
+    let json_str = serde_json::to_string(&field_map).unwrap();
+    let updated_settings = serde_json::from_str::<UserApplicationSettings>(json_str.as_str()).unwrap();
+
+    database.create_or_update_user_application_settings(&user.kerberos_username, &updated_settings).await;
+    println!("{:#?}", &updated_settings);
 
     return HttpResponse::Ok().finish();
 }

@@ -39,6 +39,8 @@ pub(crate) struct UserApplicationSettings {
     pub custom_driver: CustomDriver,
     pub debug_mode: bool,
     pub target_courses: Vec<BUCourse>,
+    pub allow_update_emails: bool,
+    pub allow_marketing_emails: bool,
     pub email: Option<String>,
     pub phone: Option<String>,
 }
@@ -63,6 +65,8 @@ impl Default for UserApplicationSettings {
                 ..CustomDriver::default()
             },
             debug_mode: false,
+            allow_update_emails: true,
+            allow_marketing_emails: true,
             email: None,
             phone: None,
             target_courses: Vec::new(),
@@ -94,6 +98,8 @@ impl UserApplicationSettings {
                 enabled: row.try_get("custom_chrome_driver")?,
                 driver_path: row.try_get("custom_chrome_driver_path")?,
             },
+            allow_update_emails: row.try_get("allow_update_emails")?,
+            allow_marketing_emails: row.try_get("allow_marketing_emails")?,
             email: row.try_get("alert_email")?,
             phone: row.try_get("alert_phone")?,
             debug_mode: row.try_get("debug_mode")?,

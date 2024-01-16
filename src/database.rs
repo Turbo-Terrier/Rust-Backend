@@ -270,7 +270,7 @@ impl DatabasePool {
                     .expect("Error executing the close_purchase_session query");
 
                 // mark demo over
-                self.mark_demo_over(&kerberos_username);
+                self.mark_demo_over(&kerberos_username).await;
             }
 
             return true;
@@ -524,9 +524,9 @@ impl DatabasePool {
                 save_duo_cookies, registration_notifications,
                 register_email_alert, register_text_alert, register_phone_alert,
                 watchdog_notifications, watchdog_email_alert, watchdog_text_alert,
-                watchdog_phone_alert, alert_phone, alert_email, console_colors,
-                custom_chrome_driver, custom_chrome_driver_path, debug_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                watchdog_phone_alert, allow_update_emails, allow_marketing_emails, alert_phone, alert_email,
+                console_colors, custom_chrome_driver, custom_chrome_driver_path, debug_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE real_registrations=VALUES(real_registrations),
                 keep_trying=VALUES(keep_trying), save_password=VALUES(save_password),
                 save_duo_cookies=VALUES(save_duo_cookies), registration_notifications=VALUES(registration_notifications),
@@ -534,6 +534,7 @@ impl DatabasePool {
                 register_text_alert=VALUES(register_text_alert), register_phone_alert=VALUES(register_phone_alert),
                 watchdog_notifications=VALUES(watchdog_notifications), watchdog_email_alert=VALUES(watchdog_email_alert),
                 watchdog_text_alert=VALUES(watchdog_text_alert), watchdog_phone_alert=VALUES(watchdog_phone_alert),
+                allow_update_emails=VALUES(allow_update_emails), allow_marketing_emails=VALUES(allow_marketing_emails),
                 alert_phone=VALUES(alert_phone), alert_email=VALUES(alert_email), console_colors=VALUES(console_colors),
                 custom_chrome_driver=VALUES(custom_chrome_driver), custom_chrome_driver_path=VALUES(custom_chrome_driver_path),
                 debug_mode=VALUES(debug_mode)
@@ -551,6 +552,8 @@ impl DatabasePool {
             .bind(&course_settings.watchdog_notifications.email_alerts)
             .bind(&course_settings.watchdog_notifications.text_alerts)
             .bind(&course_settings.watchdog_notifications.call_alerts)
+            .bind(&course_settings.allow_update_emails)
+            .bind(&course_settings.allow_marketing_emails)
             .bind(&course_settings.email)
             .bind(&course_settings.phone)
             .bind(&course_settings.console_colors)
@@ -687,6 +690,8 @@ impl DatabasePool {
                 watchdog_email_alert       tinyint(1)   not null,
                 watchdog_text_alert        tinyint(1)   not null,
                 watchdog_phone_alert       tinyint(1)   not null,
+                allow_update_emails        tinyint(1)   not null,
+                allow_marketing_emails     tinyint(1)   not null,
                 alert_phone                varchar(16)  null,
                 alert_email                varchar(320) null,
                 console_colors             tinyint(1)   not null,
