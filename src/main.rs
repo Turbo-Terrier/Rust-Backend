@@ -3,6 +3,7 @@ mod encrypted_signing;
 mod smtp_mailing_util;
 mod google_oauth;
 mod stripe_util;
+mod course_list_scraper;
 
 pub mod data_structs {
     pub mod user;
@@ -27,16 +28,13 @@ pub mod data_structs {
     }
 }
 
-pub mod api {
-    pub mod app_api;
-    pub mod web_api;
-    pub mod stripe_hook;
-}
+pub mod api;
 
 
 use std::fs::File;
 use database::DatabasePool;
 use std::io::{Read, Write};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use actix_cors::Cors;
 use yaml_rust::{Yaml, YamlLoader};
@@ -160,14 +158,15 @@ async fn load() -> Result<SharedResources, std::io::Error> {
 async fn main() -> std::io::Result<()> {
 
     let shared_resources = load().await.unwrap();
-    let copied_resource = shared_resources.clone();
+    let copied_resource_1 = shared_resources.clone();
+    let copied_resource_2 = shared_resources.clone();
 
     println!("Starting cleanup task");
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_millis(10000));
         loop {
             let cleanup_start_time = Instant::now();
-            copied_resource.database.cleanup_dead_sessions().await;
+            copied_resource_1.database.cleanup_dead_sessions().await;
             let task_time = cleanup_start_time.elapsed().as_millis();
             // as the database grows, this task will take longer to complete
             // if it takes longer than 9 seconds, we should warn ourselves
@@ -177,6 +176,24 @@ async fn main() -> std::io::Result<()> {
             interval.tick().await;
         }
     });
+
+    // course_list_scraper::get_sites(&copied_resource_2.database, true).await;
+    // println!("Starting course scraping task");
+    // tokio::spawn(async move {
+    //     let mut interval = time::interval(Duration::from_secs(3600));
+    //     loop {
+    //         let cleanup_start_time = Instant::now();
+    //         course_list_scraper::get_sites(&copied_resource_2.database, true).await;
+    //         let task_time = cleanup_start_time.elapsed().as_millis();
+    //         // as the database grows, this task will take longer to complete
+    //         // if it takes longer than 9 seconds, we should warn ourselves
+    //         if task_time > 9000 {
+    //             println!("Warning: cleanup task took {}ms to complete", task_time);
+    //         }
+    //         interval.tick().await;
+    //     }
+    // });
+
     println!("Starting HTTP server...");
     env_logger::init_from_env(Env::default().default_filter_or("info")); // enables built in actix logger
     HttpServer::new( move || {
@@ -203,6 +220,10 @@ async fn main() -> std::io::Result<()> {
                 .service(web_api::reset_app_token)
                 .service(web_api::update_user_app_settings)
                 .service(web_api::get_user_app_settings)
+                .service(web_api::add_course)
+                .service(web_api::del_course)
+                .service(web_api::get_available_courses)
+                .service(web_api::get_active_semesters)
                 .service(web_api::payment_status)
                 .service(web_api::pricing)
                 .service(web_api::create_checkout_session)

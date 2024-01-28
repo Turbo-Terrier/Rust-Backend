@@ -7,6 +7,7 @@ use crate::data_structs::bu_course::BUCourse;
 pub struct RegistrationNotification {
     pub credentials: AppCredentials,
     pub session_id: i64,
-    pub course: BUCourse,
+    pub course_id: u32,
+    pub section_id: String,
     pub timestamp: i64,
 }

@@ -7,7 +7,7 @@ use crate::data_structs::app_credentials::AppCredentials;
 use crate::data_structs::device_meta;
 use crate::data_structs::device_meta::DeviceMeta;
 use crate::data_structs::user::User;
-use crate::data_structs::bu_course::BUCourse;
+use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
 use crate::data_structs::grant_level::GrantLevel;
 use crate::data_structs::requests::session_ping::SessionPing;
 use crate::data_structs::requests::application_start::ApplicationStart;
@@ -16,6 +16,7 @@ use crate::data_structs::semester::{Semester, SemesterSeason};
 use crate::data_structs::app_config::{UserApplicationSettings};
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 use crate::stripe_util::StripeHandler;
+use crate::data_structs::bu_course::CourseSection;
 use stripe::CustomerId;
 
 #[derive(Debug)]
@@ -80,31 +81,23 @@ impl DatabasePool {
     }
 
 
-    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course: &BUCourse) -> bool {
+    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course_id: u32, course_section: &str) -> bool {
         // sanity check to ensure session is alive
         if !Self::is_session_alive(&self, session_id).await {
             return false;
         }
 
         sqlx::query(r#"
-            UPDATE session_courses
+            UPDATE app_session_courses
             SET register_timestamp=?
             WHERE session_id=?
-            AND semester_season=?
-            AND semester_year=?
-            AND college=?
-            AND department=?
-            AND course_code=?
-            AND section=?
+            AND course_id=?
+            AND course_section=?
         "#)
             .bind(&registration_timestamp)
             .bind(&session_id)
-            .bind(&course.semester.semester_season.to_string())
-            .bind(&course.semester.semester_year)
-            .bind(&course.college)
-            .bind(&course.department)
-            .bind(&course.course_code)
-            .bind(&course.section)
+            .bind(&course_id)
+            .bind(course_section)
             .execute(&self.pool).await
             .expect("Error executing the mark_course_registered query");
 
@@ -166,19 +159,15 @@ impl DatabasePool {
         let session_id = result.last_insert_id() as i64;
 
         // write the courses to the database as well
-        for course in &session_data.target_courses {
+        for (course_id, course_section) in &session_data.target_courses {
             sqlx::query(r#"
-                INSERT INTO session_courses
-                (session_id, semester_season, semester_year, college, department, course_code, section)
+                INSERT INTO app_session_courses
+                (session_id, course_id, course_section)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             "#)
                 .bind(&session_id)
-                .bind(&course.semester.semester_season.to_string())
-                .bind(&course.semester.semester_year)
-                .bind(&course.college)
-                .bind(&course.department)
-                .bind(&course.course_code)
-                .bind(&course.section)
+                .bind(course_id)
+                .bind(course_section)
                 .execute(&self.pool).await
                 .expect("Error executing the create_session query");
         }
@@ -291,8 +280,6 @@ impl DatabasePool {
             .bind(kerberos_username)
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the create_or_update_user query");
-
-        println!("CALLED!!");
 
         // if this user already exists, update the user in db and on stripe and return
         if !result.is_empty() {
@@ -499,12 +486,15 @@ impl DatabasePool {
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the get_user_application_settings query");
         if result.is_empty() {
-            return None;
+            let mut application_config = UserApplicationSettings::default();
+            application_config.target_courses = self.get_user_application_courses(kerberos_username).await;
+            return Some(application_config);
         } else {
             let row = result.get(0).unwrap();
             match UserApplicationSettings::decode(row) {
                 Ok(mut application_config) => {
                     let courses = self.get_user_application_courses(kerberos_username).await;
+                    println!("courses: {:?}", courses);
                     application_config.target_courses = courses;
                     return Some(application_config);
                 },
@@ -564,41 +554,51 @@ impl DatabasePool {
             .expect("Error executing the create_or_update_user_application_settings query");
     }
 
-    pub async fn user_course_settings_add_course(&self, kerberos_username: &String, course: &BUCourse) {
+    pub async fn add_custom_course_and_section(&self, semester: &Semester, course_code: &str, section: &str) -> BUCourseSection {
+        let course_section = CourseSection {
+            section: section.to_string(),
+            ..CourseSection::default()
+        };
+
+        let bu_course_section = self.add_course(semester, course_code, None,
+                                      None, false, vec![course_section]).await;
+
+        return bu_course_section[0].clone();
+    }
+
+    pub async fn user_course_settings_add_course(&self, kerberos_username: &String, course_id: u32, course_section: &String) {
         sqlx::query(r#"
-                INSERT INTO user_application_course_settings
-                (kerberos_username, semester_season, semester_year, college, department, course_code, section)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
+                INSERT IGNORE INTO user_application_course_settings
+                (kerberos_username, course_id, course_section)
+                VALUES (?, ?, ?);
             "#)
             .bind(&kerberos_username)
-            .bind(&course.semester.semester_season.to_string())
-            .bind(&course.semester.semester_year)
-            .bind(&course.college)
-            .bind(&course.department)
-            .bind(&course.course_code)
-            .bind(&course.section)
+            .bind(course_id)
+            .bind(course_section)
             .execute(&self.pool).await
             .expect("Error executing the user_course_settings_add_course query");
     }
 
-    pub async fn user_course_settings_delete_course(&self, kerberos_username: &String, course: &BUCourse) {
+    pub async fn user_course_settings_delete_course(&self, kerberos_username: &String, course_id: u32, course_section: &str) {
         sqlx::query(r#"
                 DELETE FROM user_application_course_settings
-                WHERE kerberos_username=? AND semester_season=? AND semester_year=? AND college=? AND department=? AND course_code=? AND section=?;
+                WHERE kerberos_username=? AND course_id=? AND course_section=?;
             "#)
             .bind(&kerberos_username)
-            .bind(&course.semester.semester_season.to_string())
-            .bind(&course.semester.semester_year)
-            .bind(&course.college)
-            .bind(&course.department)
-            .bind(&course.course_code)
-            .bind(&course.section)
+            .bind(course_id)
+            .bind(course_section)
             .execute(&self.pool).await
             .expect("Error executing the user_course_settings_delete_course query");
     }
 
-    async fn get_user_application_courses(&self, kerberos_username: &str) -> Vec<BUCourse> {
-        let result = sqlx::query("SELECT * from user_application_course_settings WHERE kerberos_username=?")
+    async fn get_user_application_courses(&self, kerberos_username: &str) -> Vec<BUCourseSection> {
+        let result = sqlx::query(r#"
+                    SELECT * from user_application_course_settings
+                    INNER JOIN course_catalog cc on user_application_course_settings.course_id = cc.course_id
+                    INNER JOIN course_sections_catalog csc on user_application_course_settings.course_id = csc.course_id
+                                                     AND user_application_course_settings.course_section = csc.course_section
+                    WHERE kerberos_username=?
+                "#)
             .bind(kerberos_username)
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the get_user_application_courses query");
@@ -607,12 +607,12 @@ impl DatabasePool {
         } else {
             let mut courses = Vec::new();
             for row in result {
-                match BUCourse::decode(&row) {
+                match BUCourseSection::decode(&row) {
                     Ok(course) => {
                         courses.push(course);
                     },
                     Err(err) => {
-                        eprintln!("Error decoding application course: {}", err);
+                        eprintln!("Error decoding user application setting courses: {}", err);
                     }
                 }
             }
@@ -620,13 +620,156 @@ impl DatabasePool {
         }
     }
 
+
+    pub async fn get_courses(&self, semester: &Semester) -> Vec<BUCourseSection> {
+        let mut output: Vec<BUCourseSection> = Vec::new();
+
+        let results = sqlx::query("SELECT * from course_catalog INNER JOIN course_sections_catalog csc on course_catalog.course_id = csc.course_id WHERE semester_season=? AND semester_year=?;")
+            .bind(&semester.semester_season.to_string())
+            .bind(&semester.semester_year)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the search_course query");
+
+        for result in &results {
+            let course_id = result.get_unchecked::<u32, &str>("course_id");
+            let semester_season = result.get_unchecked::<SemesterSeason, &str>("semester_season");
+            let semester_year = result.get_unchecked::<u16, &str>("semester_year");
+            let college = result.get_unchecked::<String, &str>("college");
+            let department = result.get_unchecked::<String, &str>("department");
+            let course_code = result.get_unchecked::<u16, &str>("course_code");
+            let title = result.get_unchecked::<Option<String>, &str>("title");
+            let credits = result.get_unchecked::<Option<u8>, &str>("credits");
+            let section = result.get_unchecked::<String, &str>("course_section");
+            let open_seats = result.get_unchecked::<Option<u8>, &str>("open_seats");
+            let instructor = result.get_unchecked::<Option<String>, &str>("instructor");
+            let section_type = result.get_unchecked::<Option<String>, &str>("section_type");
+            let location = result.get_unchecked::<Option<String>, &str>("location");
+            let schedule = result.get_unchecked::<Option<String>, &str>("schedule");
+            let dates = result.get_unchecked::<Option<String>, &str>("dates");
+            let notes = result.get_unchecked::<Option<String>, &str>("notes");
+
+            output.push(BUCourseSection {
+                course: BUCourse {
+                    course_id: course_id,
+                    semester: Semester {
+                        semester_season: semester_season,
+                        semester_year: semester_year
+                    },
+                    college: college,
+                    department: department,
+                    course_code: course_code,
+                    title: title.clone(),
+                    credits: credits,
+                },
+                section: CourseSection {
+                    section: section,
+                    open_seats: open_seats,
+                    instructor: instructor,
+                    section_type: section_type,
+                    location: location,
+                    schedule: schedule,
+                    dates: dates,
+                    notes: notes,
+                },
+            });
+        }
+
+        return output;
+    }
+
+    // course added by the scrapper are "confirmed to exist"
+    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, scraper_added: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
+        println!("ADDING {} - {:?} | {:?}", course_code, course_title, &sections);
+        let (college, department, code) = BUCourse::from_course_code_str(course_code);
+
+        let result = sqlx::query(r#"
+            INSERT IGNORE INTO course_catalog
+            (semester_season, semester_year, college, department, course_code, title, credits, existance_confirmed, added_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE title=VALUES(title), credits=VALUES(credits), existance_confirmed=VALUES(existance_confirmed)
+        "#)
+            .bind(&semester.semester_season.to_string())
+            .bind(&semester.semester_year)
+            .bind(college)
+            .bind(department)
+            .bind(code)
+            .bind(&course_title)
+            .bind(&credits)
+            .bind(&scraper_added)
+            .bind(&chrono::Local::now().timestamp())
+            .execute(&self.pool).await
+            .expect("Error executing the add_course query");
+
+        // retrieve insert (or updated) id todo make unsigned
+        let course_id: u32 = sqlx::query_scalar(r#"
+                SELECT course_id FROM course_catalog WHERE college=? AND department=? AND course_code=?;
+            "#)
+            .bind(college)
+            .bind(department)
+            .bind(code)
+            .fetch_one(&self.pool).await
+            .expect("Error retrieving last insert id");
+
+        for section in &sections {
+            sqlx::query(r#"
+                INSERT INTO course_sections_catalog
+                (course_id, course_section, open_seats, instructor, section_type, location, schedule, dates, notes, existance_confirmed, added_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
+                open_seats=VALUES(open_seats), instructor=VALUES(instructor), section_type=VALUES(section_type),
+                location=VALUES(location), schedule=VALUES(schedule), dates=VALUES(dates), notes=VALUES(notes)
+            "#)
+                .bind(&course_id)
+                .bind(&section.section)
+                .bind(&section.open_seats)
+                .bind(&section.instructor)
+                .bind(&section.section_type)
+                .bind(&section.location)
+                .bind(&section.schedule)
+                .bind(&section.dates)
+                .bind(&section.notes)
+                .bind(&scraper_added)
+                .bind(&chrono::Local::now().timestamp())
+                .execute(&self.pool).await
+                .expect("Error executing the add_course query");
+        }
+
+        let (college, department, code) = BUCourse::from_course_code_str(course_code);
+
+        let mut bu_course_sections: Vec<BUCourseSection> = Vec::new();
+
+        for course_section in sections {
+            let bu_course_section = BUCourseSection {
+                course: BUCourse {
+                    course_id: course_id,
+                    semester: Semester {
+                        semester_season: semester.semester_season.clone(),
+                        semester_year: semester.semester_year
+                    },
+                    college: college.to_string(),
+                    department: department.to_string(),
+                    course_code: code,
+                    title: course_title.clone(),
+                    credits,
+                },
+                section: course_section
+            };
+            bu_course_sections.push(bu_course_section);
+        }
+
+        bu_course_sections
+    }
+
     async fn create_tables(&self) {
         Self::create_user_table(&self).await
             .expect("An error occurred create the 'users' table");
+        Self::create_course_catalog_table(&self).await
+            .expect("An error occurred create the 'course_catalog' table");
+        Self::create_course_section_catalog_tables(&self).await
+            .expect("An error occurred create the 'course_sections_catalog' table");
         Self::create_launch_tracker_table(&self).await
             .expect("An error occurred create the 'application_launch_session' table");
         Self::create_session_courses_table(&self).await
-            .expect("An error occurred create the 'session_courses' table");
+            .expect("An error occurred create the 'app_session_courses' table");
         Self::create_session_end_table(&self).await
             .expect("An error occurred create the 'application_terminate_session' table");
         Self::create_user_purchase_sessions_table(&self).await
@@ -635,21 +778,62 @@ impl DatabasePool {
             .expect("An error occurred create the 'user_application_settings' table");
         Self::create_application_course_settings_table(&self).await
             .expect("An error occurred create the 'user_application_course_settings' table");
-        Self::create_known_courses_table(&self).await
+        Self::create_user_application_course_settings(&self).await
             .expect("An error occurred create the 'known_courses' table");
     }
 
-    async fn create_known_courses_table(&self) -> Result<MySqlQueryResult, Error> {
+    async fn create_course_section_catalog_tables(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists course_sections_catalog
+            (
+                course_id             int unsigned,
+                course_section        varchar(4)   not null,
+                open_seats            smallint     null,
+                instructor            varchar(64)  null,
+                section_type          varchar(6)   null,
+                location              varchar(64)  null,
+                schedule              varchar(64)  null,
+                dates                 varchar(64)  null,
+                notes                 varchar(256) null,
+                existance_confirmed   tinyint(1)   not null,
+                added_timestamp       bigint       not null,
+                foreign key (course_id) references course_catalog (course_id),
+                primary key (course_id, course_section)
+            );
+        "#).await
+    }
+
+    async fn create_course_catalog_table(&self) -> Result<MySqlQueryResult, Error> {
+        self.pool.execute(r#"
+            create table if not exists course_catalog
+                (
+                    course_id             int unsigned auto_increment                    primary key,
+                    semester_season       enum ('Spring', 'Summer 1', 'Summer 2', 'Fall')  not null,
+                    semester_year         smallint unsigned                              not null,
+                    college               varchar(6)                                     not null,
+                    department            varchar(6)                                     not null,
+                    course_code           smallint unsigned                              not null,
+                    title                 varchar(256)                                   null,
+                    credits               tinyint                                        null,
+                    existance_confirmed   tinyint(1)                                     not null,
+                    added_timestamp       bigint                                         not null,
+                    unique key (college, department, course_code)
+                );
+        "#).await
+    }
+
+    async fn create_user_application_course_settings(&self) -> Result<MySqlQueryResult, Error> {
         self.pool.execute(r#"
             create table if not exists user_application_course_settings
             (
-                semester_season   enum ('Summer1', 'Summer2', 'Fall', 'Spring') not null,
-                semester_year     smallint                                      not null,
-                college           varchar(6)                                    not null,
-                department        varchar(6)                                    not null,
-                course_code       smallint                                      not null,
-                section           varchar(6)                                    not null,
-                primary key (semester_season, semester_year, college, department, course_code, section)
+                kerberos_username varchar(64)                                   not null,
+                course_id         int unsigned                                  not null,
+                course_section    varchar(6)                                    not null,
+                foreign key (course_id, course_section)
+                    references course_sections_catalog (course_id, course_section),
+                foreign key (kerberos_username)
+                    references users (kerberos_username),
+                primary key  (kerberos_username, course_id, course_section)
             );
         "#).await
     }
@@ -660,13 +844,9 @@ impl DatabasePool {
             (
                 kerberos_username varchar(64)                                   not null
                     references users (kerberos_username),
-                semester_season   enum ('Summer1', 'Summer2', 'Fall', 'Spring') not null,
-                semester_year     smallint                                      not null,
-                college           varchar(6)                                    not null,
-                department        varchar(6)                                    not null,
-                course_code       smallint                                      not null,
-                section           varchar(6)                                    not null,
-                primary key (kerberos_username, semester_season, semester_year, college, department, course_code, section)
+                course_id           int unsigned                               not null,
+                course_section      varchar(6)                                  not null,
+                primary key (kerberos_username, course_id, course_section)
             );
         "#).await
     }
@@ -764,18 +944,17 @@ impl DatabasePool {
 
     async fn create_session_courses_table(&self) -> Result<MySqlQueryResult, Error> {
         self.pool.execute(r#"
-        create table if not exists session_courses
+        create table if not exists app_session_courses
         (
             session_id          int                                           not null,
-            semester_season     enum('Summer1', 'Summer2', 'Fall', 'Spring')  not null,
-            semester_year       smallint                                      not null,
-            college             varchar(6)                                    not null,
-            department          varchar(6)                                    not null,
-            course_code         smallint                                      not null,
-            section             varchar(6)                                    not null,
+            course_id           int unsigned                                  not null,
+            course_section      varchar(6)                                    not null,
             register_timestamp  bigint                                        null,
-            primary key (session_id, semester_season, semester_year, college, department, course_code, section),
-            foreign key (session_id) references application_launch_session (session_id)
+            primary key (session_id, course_id, course_section),
+            foreign key (session_id)
+                references application_launch_session        (session_id),
+            foreign key (course_id, course_section) 
+                references course_sections_catalog           (course_id, course_section)
         );
         "#).await
     }

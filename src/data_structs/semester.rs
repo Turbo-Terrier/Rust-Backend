@@ -4,7 +4,10 @@ use std::str::FromStr;
 use std::string::ParseError;
 use chrono::{Datelike, Duration, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
-use sqlx::{Decode, Row};
+use sqlx::{Decode, Encode, MySql, Row, Type};
+use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
+use sqlx::mysql::{MySqlTypeInfo, MySqlValueRef};
 
 #[derive(Debug, PartialEq, Eq)]
 #[derive(Deserialize, Serialize, sqlx::Type)]
@@ -184,8 +187,9 @@ impl Semester {
     }
 
     pub fn decode(row: &sqlx::mysql::MySqlRow) -> Result<Self, sqlx::Error> {
+        let semester_season = row.try_get::<&str, &str>("semester_season")?;
         Ok(Semester {
-            semester_season: row.try_get::<SemesterSeason, &str>("semester_season")?,
+            semester_season: SemesterSeason::from_str(semester_season).unwrap(),
             semester_year: row.try_get("semester_year")?,
         })
     }

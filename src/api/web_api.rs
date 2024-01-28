@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::iter::Map;
 use actix_web::cookie::time::Duration;
-use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
+use actix_web::{delete, get, HttpRequest, HttpResponse, post, Responder, web};
 use actix_web::cookie::Cookie;
 use actix_web::http::header;
 use actix_web::web::Redirect;
@@ -13,6 +13,7 @@ use crate::google_oauth::{GoogleAuthCode, GoogleClientSecret};
 use crate::{SharedResources, stripe_util};
 use crate::data_structs::app_config::UserApplicationSettings;
 use crate::data_structs::responses::web_register_response::{WebRegisterResponse};
+use crate::data_structs::semester::{Semester, SemesterSeason};
 
 #[get("/ping")]
 async fn debug_ping() -> impl Responder {
@@ -147,6 +148,11 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
     HttpResponse::Ok().json(checkout_session.url)
 }
 
+#[post("/custom-course")]
+pub async fn add_custom_course() -> impl Responder {
+    ""
+}
+
 #[post("/user-app-settings")]
 pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<HashMap<String, Value>>) -> impl Responder {
     let jwt_secret = &data.get_ref().jwt_secret;
@@ -167,6 +173,9 @@ pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: Htt
     let token = user.unwrap();
     let user = token.claims();
 
+    // todo: this middle processing you having to first fetch existing settings is very inefficient
+    //  and instead the create_or_update_user_application_settings should be rewritten
+
     // get the current application settings
     let current_settings = match database.get_user_application_settings(&user.kerberos_username).await {
         Some(settings) => settings,
@@ -186,6 +195,76 @@ pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: Htt
 
     database.create_or_update_user_application_settings(&user.kerberos_username, &updated_settings).await;
     println!("{:#?}", &updated_settings);
+
+    return HttpResponse::Ok().finish();
+}
+
+#[derive(Deserialize)]
+struct CourseReference {
+    course_id: u32,
+    section_id: String
+}
+
+#[delete("course-update")]
+pub async fn del_course(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<CourseReference>) -> impl Responder {
+
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    let info = info.into_inner();
+    let course_id = info.course_id;
+    let section_id = &info.section_id;
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let token = user.unwrap();
+    let user = token.claims();
+    let kerberos_username = &user.kerberos_username;
+
+    // todo: return status?
+    database.user_course_settings_delete_course(kerberos_username, course_id, section_id).await;
+
+    return HttpResponse::Ok().finish();
+}
+
+#[post("course-update")]
+pub async fn add_course(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<CourseReference>) -> impl Responder {
+
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    let info = info.into_inner();
+    let course_id = info.course_id;
+    let section_id = &info.section_id;
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let token = user.unwrap();
+    let user = token.claims();
+    let kerberos_username = &user.kerberos_username;
+
+    // todo: return status?
+    database.user_course_settings_add_course(kerberos_username, course_id, section_id).await;
 
     return HttpResponse::Ok().finish();
 }
@@ -218,6 +297,52 @@ pub async fn get_user_app_settings(data: web::Data<SharedResources>, req: HttpRe
         .json(settings);
 }
 
+#[get("/active-semesters")]
+pub async fn get_active_semesters(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let semesters = Semester::get_current_and_upcoming_semesters();
+
+    return HttpResponse::Ok()
+        .json(semesters);
+}
+
+#[get("/get-available-courses")]
+pub async fn get_available_courses(data: web::Data<SharedResources>, req: HttpRequest, info: web::Query<Semester>) -> impl Responder {
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let database = &data.get_ref().database;
+    let auth_header = req.headers().get("Authorization");
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    // todo fix this, hard coded for now
+    let courses = database.get_courses(&info.into_inner()).await;
+
+    HttpResponse::Ok()
+        .json(courses)
+}
 
 #[post("/contact-request")]
 pub async fn contact_request(data: web::Data<SharedResources>, req: HttpRequest) -> impl Responder {

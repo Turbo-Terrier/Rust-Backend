@@ -164,7 +164,7 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
     return match database.mark_course_registered(
         reg_notif_data.session_id,
         reg_notif_data.timestamp,
-        &reg_notif_data.course)
+        reg_notif_data.course_id, reg_notif_data.section_id.as_str())
         .await {
             true => {
                 // first if this is a demo user, mark demo over

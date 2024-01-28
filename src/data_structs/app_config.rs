@@ -2,7 +2,7 @@ use actix_web::App;
 use serde::{Deserialize, Serialize};
 use sqlx::{Decode, MySql, Pool, Row, Type};
 use sqlx::mysql::MySqlRow;
-use crate::data_structs::bu_course::BUCourse;
+use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
 use crate::database::DatabasePool;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ pub(crate) struct UserApplicationSettings {
     pub console_colors: bool,
     pub custom_driver: CustomDriver,
     pub debug_mode: bool,
-    pub target_courses: Vec<BUCourse>,
+    pub target_courses: Vec<BUCourseSection>,
     pub allow_update_emails: bool,
     pub allow_marketing_emails: bool,
     pub email: Option<String>,
