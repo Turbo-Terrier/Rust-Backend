@@ -642,7 +642,7 @@ impl DatabasePool {
             let semester_year = result.get_unchecked::<u16, &str>("semester_year");
             let college = result.get_unchecked::<String, &str>("college");
             let department = result.get_unchecked::<String, &str>("department");
-            let course_code = result.get_unchecked::<u16, &str>("course_code");
+            let course_code = result.get_unchecked::<String, &str>("course_code");
             let title = result.get_unchecked::<Option<String>, &str>("title");
             let credits = result.get_unchecked::<Option<u8>, &str>("credits");
             let section = result.get_unchecked::<String, &str>("course_section");
@@ -739,8 +739,6 @@ impl DatabasePool {
                 .expect("Error executing the add_course query");
         }
 
-        let (college, department, code) = BUCourse::from_course_code_str(course_code);
-
         let mut bu_course_sections: Vec<BUCourseSection> = Vec::new();
 
         for course_section in sections {
@@ -753,7 +751,7 @@ impl DatabasePool {
                     },
                     college: college.to_string(),
                     department: department.to_string(),
-                    course_code: code,
+                    course_code: code.to_string(),
                     title: course_title.clone(),
                     credits,
                 },
@@ -818,7 +816,7 @@ impl DatabasePool {
                     semester_year         smallint unsigned                              not null,
                     college               char(3)                                     not null,
                     department            char(2)                                     not null,
-                    course_code           smallint unsigned                              not null,
+                    course_code           char(3)                                     not null,
                     title                 varchar(256)                                   null,
                     credits               tinyint                                        null,
                     existance_confirmed   tinyint(1)                                     not null,

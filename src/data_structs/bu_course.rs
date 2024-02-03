@@ -10,7 +10,7 @@ pub struct BUCourse {
     pub semester: Semester,
     pub college: String,
     pub department: String,
-    pub course_code: u16,
+    pub course_code: String,
     pub title: Option<String>,
     pub credits: Option<u8>,
 }
@@ -79,11 +79,11 @@ impl BUCourse {
         course_code_str.split_ascii_whitespace().collect()
     }
 
-    pub fn from_course_code_str(course_code_str: &str) -> (&str, &str, u16) {
+    pub fn from_course_code_str(course_code_str: &str) -> (&str, &str, &str) {
         let parts: Vec<&str> = course_code_str.split_ascii_whitespace().collect();
         let college = parts[0];
         let department = parts[1];
-        let code = parts[2].parse().unwrap();
+        let code = parts[2];
         return (college, department, code)
     }
 

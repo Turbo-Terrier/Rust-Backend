@@ -115,7 +115,7 @@ impl StripeHandler {
     pub async fn create_stripe_checkout_session(&self, base_url: &String, customer: CustomerId, quantity: u64, unit_price: f64) -> CheckoutSession {
 
         let redirect_url_success = format!("{}/dashboard?payment_status=success", base_url);
-        let redirect_url_failure = format!("{}/dashboard?payment_status=failure", base_url);
+        let redirect_url_failure = format!("{}/dashboard", base_url);
         let mut checkout_session = CreateCheckoutSession::new(redirect_url_success.as_str());
         checkout_session.cancel_url = Option::from(redirect_url_failure.as_str());
         checkout_session.customer = Option::from(customer);
