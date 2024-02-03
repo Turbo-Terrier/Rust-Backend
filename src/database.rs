@@ -81,7 +81,7 @@ impl DatabasePool {
     }
 
 
-    pub async fn mark_course_registered(&self, session_id: i64, registration_timestamp: i64, course_id: u32, course_section: &str) -> bool {
+    pub async fn mark_course_registered(&self, kerberos_username: &str, session_id: i64, registration_timestamp: i64, course_id: u32, course_section: &str) -> bool {
         // sanity check to ensure session is alive
         if !Self::is_session_alive(&self, session_id).await {
             return false;
@@ -99,7 +99,14 @@ impl DatabasePool {
             .bind(&course_id)
             .bind(course_section)
             .execute(&self.pool).await
-            .expect("Error executing the mark_course_registered query");
+            .expect("Error executing the mark_course_registered query 1");
+
+        sqlx::query(r#"
+            UPDATE users SET current_credits=MIN(0,current_credits-1) WHERE kerberos_username=?;
+        "#)
+            .bind(kerberos_username)
+            .execute(&self.pool).await
+            .expect("Error executing the mark_course_registered query 2");
 
         return true;
     }
@@ -206,8 +213,8 @@ impl DatabasePool {
         sqlx::query(r#"
             INSERT INTO user_purchase_sessions
             (kerberos_username, session_id, quantity, subtotal, total,
-            coupons, succeeded, processed, begin_timestamp, finish_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            coupon, succeeded, processed, begin_timestamp, finish_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#)
             .bind(&kerberos_username)
             .bind(&session_id)
@@ -355,7 +362,7 @@ impl DatabasePool {
                 .bind(&user_info.given_name)
                 .bind(&user_info.family_name)
                 .bind(&user_info.picture)
-                .bind(0)
+                .bind(1)
                 .bind(&auth_key)
                 .bind(registration_timestamp)
                 .execute(&self.pool).await
@@ -494,7 +501,6 @@ impl DatabasePool {
             match UserApplicationSettings::decode(row) {
                 Ok(mut application_config) => {
                     let courses = self.get_user_application_courses(kerberos_username).await;
-                    println!("courses: {:?}", courses);
                     application_config.target_courses = courses;
                     return Some(application_config);
                 },
@@ -810,8 +816,8 @@ impl DatabasePool {
                     course_id             int unsigned auto_increment                    primary key,
                     semester_season       enum ('Spring', 'Summer 1', 'Summer 2', 'Fall')  not null,
                     semester_year         smallint unsigned                              not null,
-                    college               varchar(6)                                     not null,
-                    department            varchar(6)                                     not null,
+                    college               char(3)                                     not null,
+                    department            char(2)                                     not null,
                     course_code           smallint unsigned                              not null,
                     title                 varchar(256)                                   null,
                     credits               tinyint                                        null,

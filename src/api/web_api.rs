@@ -122,6 +122,7 @@ struct Quantity(u64);
 pub async fn create_checkout_session(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<Quantity>) -> impl Responder {
     let jwt_secret = &data.get_ref().jwt_secret;
     let stripe_handler = &data.get_ref().stripe_handler;
+    let database = &data.get_ref().database;
     let auth_header = req.headers().get("Authorization");
 
     if auth_header.is_none() {
@@ -143,6 +144,13 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
         user.stripe_id.as_str().parse().unwrap(),
         quantity,
         stripe_handler.get_unit_price(quantity)
+    ).await;
+
+    database.create_purchase_session(
+        &user.kerberos_username,
+        quantity,
+        stripe_handler.get_unit_price(quantity),
+        checkout_session.id.as_str()
     ).await;
 
     HttpResponse::Ok().json(checkout_session.url)
@@ -194,7 +202,6 @@ pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: Htt
     let updated_settings = serde_json::from_str::<UserApplicationSettings>(json_str.as_str()).unwrap();
 
     database.create_or_update_user_application_settings(&user.kerberos_username, &updated_settings).await;
-    println!("{:#?}", &updated_settings);
 
     return HttpResponse::Ok().finish();
 }

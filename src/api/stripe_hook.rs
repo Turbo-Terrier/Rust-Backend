@@ -13,28 +13,28 @@ pub async fn webhook_handler(data: web::Data<SharedResources>, req: HttpRequest,
             EventType::CheckoutSessionCompleted => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
                     handle_checkout_complete(data, session).await;
-                    HttpResponse::Ok().finish();
+                    return HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
             }
             EventType::CheckoutSessionExpired => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
                     handle_checkout_expired(data, session).await;
-                    HttpResponse::Ok().finish();
+                    return HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
             }
             EventType::CheckoutSessionAsyncPaymentSucceeded => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
                     handle_checkout_complete(data, session).await;
-                    HttpResponse::Ok().finish();
+                    return HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
             }
             EventType::CheckoutSessionAsyncPaymentFailed => {
                 if let EventObject::CheckoutSession(session) = event.data.object {
                     handle_checkout_expired(data, session).await;
-                    HttpResponse::Ok().finish();
+                    return HttpResponse::Ok().finish();
                 }
                 return HttpResponse::BadRequest().finish();
             }

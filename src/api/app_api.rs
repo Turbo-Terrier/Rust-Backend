@@ -162,6 +162,7 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
     let user = database.get_user(&reg_notif_data.credentials.kerberos_username).await.unwrap();
 
     return match database.mark_course_registered(
+        reg_notif_data.credentials.kerberos_username.as_str(),
         reg_notif_data.session_id,
         reg_notif_data.timestamp,
         reg_notif_data.course_id, reg_notif_data.section_id.as_str())
@@ -170,7 +171,9 @@ async fn course_registered(data: web::Data<SharedResources>, payload: web::Json<
                 // first if this is a demo user, mark demo over
                 if user.demo_expired_at.is_none() {
                     database.mark_demo_over(&reg_notif_data.credentials.kerberos_username).await;
-                } //todo: take away credit
+                }
+
+                // note: credits are subtracted in the mark_course_registered method
 
                 let response = StatusResponse::new(
                     reg_notif_data.credentials.kerberos_username,
