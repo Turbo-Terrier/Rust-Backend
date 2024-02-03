@@ -154,6 +154,7 @@ impl DatabasePool {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
             .bind(&session_data.credentials.kerberos_username)
             .bind(&session_data.device_meta.ip)
+            .bind(&session_data.device_meta.name)
             .bind(&session_data.device_meta.os)
             .bind(&session_data.device_meta.system_arch)
             .bind(&session_data.device_meta.core_count)
@@ -480,6 +481,7 @@ impl DatabasePool {
             Option::from(DeviceMeta {
                 ip: row.get_unchecked::<Option<String>, &str>("device_ip"),
                 os: row.get_unchecked::<String, &str>("device_os"),
+                name: row.get_unchecked::<Option<String>, &str>("device_name"),
                 system_arch: row.get_unchecked::<String, &str>("system_arch"),
                 core_count: row.get_unchecked::<i16, &str>("device_cores"),
                 cpu_speed: row.get_unchecked::<f32, &str>("device_clock_speed")
@@ -630,7 +632,14 @@ impl DatabasePool {
     pub async fn get_courses(&self, semester: &Semester) -> Vec<BUCourseSection> {
         let mut output: Vec<BUCourseSection> = Vec::new();
 
-        let results = sqlx::query("SELECT * from course_catalog INNER JOIN course_sections_catalog csc on course_catalog.course_id = csc.course_id WHERE semester_season=? AND semester_year=?;")
+        let results = sqlx::query(r#"
+                    SELECT * from course_catalog cc
+                    INNER JOIN course_sections_catalog csc on cc.course_id = csc.course_id
+                        WHERE semester_season=? AND
+                            semester_year=? AND
+                            cc.existance_confirmed=1 AND
+                            csc.existance_confirmed=1;
+                "#)
             .bind(&semester.semester_season.to_string())
             .bind(&semester.semester_year)
             .fetch_all(&self.pool).await
@@ -684,7 +693,7 @@ impl DatabasePool {
     }
 
     // course added by the scrapper are "confirmed to exist"
-    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, scraper_added: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
+    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, existance_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
         println!("ADDING {} - {:?} | {:?}", course_code, course_title, &sections);
         let (college, department, code) = BUCourse::from_course_code_str(course_code);
 
@@ -701,7 +710,7 @@ impl DatabasePool {
             .bind(code)
             .bind(&course_title)
             .bind(&credits)
-            .bind(&scraper_added)
+            .bind(&existance_confirmed)
             .bind(&chrono::Local::now().timestamp())
             .execute(&self.pool).await
             .expect("Error executing the add_course query");
@@ -733,7 +742,7 @@ impl DatabasePool {
                 .bind(&section.schedule)
                 .bind(&section.dates)
                 .bind(&section.notes)
-                .bind(&scraper_added)
+                .bind(&existance_confirmed)
                 .bind(&chrono::Local::now().timestamp())
                 .execute(&self.pool).await
                 .expect("Error executing the add_course query");
@@ -932,6 +941,7 @@ impl DatabasePool {
             session_id         int auto_increment,
             kerberos_username  varchar(64)                               not null,
             device_ip          varchar(16)                               null,
+            device_name        varchar(32)                               null,
             device_os          varchar(32)                               null,
             system_arch        varchar(32)                               null,
             device_cores       smallint                                  null,

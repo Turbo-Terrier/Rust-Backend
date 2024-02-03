@@ -29,3 +29,4 @@ sha2 = "^0.10"
 env_logger = "^0.10"
 async-stripe = { version = "^0.23.0", features = ["runtime-tokio-hyper"] }
 scraper = "^0.17.1"
+log = "0.4.20"

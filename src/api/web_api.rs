@@ -5,13 +5,14 @@ use actix_web::{delete, get, HttpRequest, HttpResponse, post, Responder, web};
 use actix_web::cookie::Cookie;
 use actix_web::http::header;
 use actix_web::web::Redirect;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stripe::{CheckoutSession, PriceId, Product};
 use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAuthCode, GoogleClientSecret};
 use crate::{SharedResources, stripe_util};
 use crate::data_structs::app_config::UserApplicationSettings;
+use crate::data_structs::bu_course::{BUCourse, BUCourseSection, CourseSection};
 use crate::data_structs::responses::web_register_response::{WebRegisterResponse};
 use crate::data_structs::semester::{Semester, SemesterSeason};
 
@@ -157,8 +158,36 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
 }
 
 #[post("/custom-course")]
-pub async fn add_custom_course() -> impl Responder {
-    ""
+pub async fn add_custom_course(data: web::Data<SharedResources>, req: HttpRequest, info: web::Json<BUCourseSection>) -> impl Responder {
+    let database = &data.get_ref().database;
+    let jwt_secret = &data.get_ref().jwt_secret;
+    let course = info.into_inner();
+
+    let auth_header = req.headers().get("Authorization");
+
+    if auth_header.is_none() {
+        return HttpResponse::Unauthorized().json("No authorization key supplied");
+    }
+
+    let user_auth_str = auth_header.unwrap().to_str().unwrap();
+    let user = jwt_secret.decrypt_jwt_token::<User>(user_auth_str);
+
+    if user.is_none() {
+        return HttpResponse::Unauthorized().json("Invalid");
+    }
+
+    let added_course = database.add_course(
+        &course.course.semester,
+        course.course.to_full_course_code_str().as_str(),
+        None, None, false, vec![
+            CourseSection {
+                section: course.section.section,
+                ..CourseSection::default()
+            }
+        ]
+    ).await;
+
+    HttpResponse::Ok().json(&added_course[0])
 }
 
 #[post("/user-app-settings")]
@@ -207,6 +236,7 @@ pub async fn update_user_app_settings(data: web::Data<SharedResources>, req: Htt
 }
 
 #[derive(Deserialize)]
+#[derive(Serialize)]
 struct CourseReference {
     course_id: u32,
     section_id: String
