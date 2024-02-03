@@ -1,13 +1,10 @@
 use std::fmt::{Debug, Display};
 use std::ops::{Add, Sub};
 use std::str::FromStr;
-use std::string::ParseError;
+
 use chrono::{Datelike, Duration, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
-use sqlx::{Decode, Encode, MySql, Row, Type};
-use sqlx::encode::IsNull;
-use sqlx::error::BoxDynError;
-use sqlx::mysql::{MySqlTypeInfo, MySqlValueRef};
+use sqlx::{Decode, Encode, Row};
 
 #[derive(Debug, PartialEq, Eq)]
 #[derive(Deserialize, Serialize, sqlx::Type)]

@@ -1,23 +1,23 @@
-use std::fmt::{Debug};
+use std::fmt::Debug;
 use std::time::Duration;
+
 use rand::Rng;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult, MySqlRow};
+
+use crate::data_structs::app_config::UserApplicationSettings;
 use crate::data_structs::app_credentials::AppCredentials;
-use crate::data_structs::device_meta;
-use crate::data_structs::device_meta::DeviceMeta;
-use crate::data_structs::user::User;
 use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
+use crate::data_structs::bu_course::CourseSection;
+use crate::data_structs::device_meta::DeviceMeta;
 use crate::data_structs::grant_level::GrantLevel;
-use crate::data_structs::requests::session_ping::SessionPing;
 use crate::data_structs::requests::application_start::ApplicationStart;
 use crate::data_structs::requests::application_stopped::ApplicationStopped;
+use crate::data_structs::requests::session_ping::SessionPing;
 use crate::data_structs::semester::{Semester, SemesterSeason};
-use crate::data_structs::app_config::{UserApplicationSettings};
+use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAccessToken, GoogleUserInfo};
 use crate::stripe_util::StripeHandler;
-use crate::data_structs::bu_course::CourseSection;
-use stripe::CustomerId;
 
 #[derive(Debug)]
 #[derive(Clone)]

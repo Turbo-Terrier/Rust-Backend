@@ -1,20 +1,19 @@
-use std::collections::{BTreeMap, HashMap};
-use std::iter::Map;
-use actix_web::cookie::time::Duration;
+use std::collections::HashMap;
+
 use actix_web::{delete, get, HttpRequest, HttpResponse, post, Responder, web};
 use actix_web::cookie::Cookie;
-use actix_web::http::header;
-use actix_web::web::Redirect;
+use actix_web::cookie::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stripe::{CheckoutSession, PriceId, Product};
+use stripe::CheckoutSession;
+
+use crate::data_structs::app_config::UserApplicationSettings;
+use crate::data_structs::bu_course::{BUCourseSection, CourseSection};
+use crate::data_structs::responses::web_register_response::WebRegisterResponse;
+use crate::data_structs::semester::Semester;
 use crate::data_structs::user::User;
 use crate::google_oauth::{GoogleAuthCode, GoogleClientSecret};
-use crate::{SharedResources, stripe_util};
-use crate::data_structs::app_config::UserApplicationSettings;
-use crate::data_structs::bu_course::{BUCourse, BUCourseSection, CourseSection};
-use crate::data_structs::responses::web_register_response::{WebRegisterResponse};
-use crate::data_structs::semester::{Semester, SemesterSeason};
+use crate::SharedResources;
 
 #[get("/ping")]
 async fn debug_ping() -> impl Responder {

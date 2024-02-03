@@ -1,10 +1,7 @@
-use std::process::exit;
-use std::str::FromStr;
 use serde::Serialize;
-use stripe::{CheckoutSession, CheckoutSessionMode, Client, Coupon, CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData, CreateCoupon, CreateCouponAppliesTo, CreateCustomer, CreatePrice, CreateProduct, CreateProductDefaultPriceData, Currency, Customer, CustomerId, Expandable, ListProducts, Price, PriceId, Product, ProductId, PromotionCode, PromotionCodeCurrencyOption, Timestamp, UpdateCustomer, UpdateProduct};
-use crate::data_structs::semester::Semester;
+use stripe::{CheckoutSession, CheckoutSessionMode, Client, Coupon, CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData, CreateCoupon, CreateCouponAppliesTo, CreateCustomer, Currency, Customer, CustomerId, ProductId, Timestamp, UpdateCustomer};
+
 use crate::data_structs::user::User;
-use crate::SharedResources;
 
 pub struct StripeHandler {
     stripe_secret_key: String,

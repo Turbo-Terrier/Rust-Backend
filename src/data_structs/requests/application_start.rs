@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
+
 use crate::data_structs::app_credentials::AppCredentials;
-use crate::data_structs::bu_course::BUCourse;
 use crate::data_structs::device_meta::DeviceMeta;
 
 #[derive(Debug, PartialEq)]

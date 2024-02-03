@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+
 use crate::data_structs::user::User;
 
 #[derive(Debug, PartialEq)]

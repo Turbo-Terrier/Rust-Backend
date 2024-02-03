@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{Decode, Row};
+
 use crate::data_structs::semester::Semester;
 
 #[derive(Debug, PartialEq, Eq)]

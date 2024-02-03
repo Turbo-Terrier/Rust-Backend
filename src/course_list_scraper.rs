@@ -1,5 +1,5 @@
-use scraper::{Element, ElementRef, Selector};
-use tokio::sync::RwLock;
+use scraper::{ElementRef, Selector};
+
 use crate::data_structs::bu_course::CourseSection;
 use crate::data_structs::semester::{Semester, SemesterSeason};
 use crate::database::DatabasePool;

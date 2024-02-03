@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+
 use crate::data_structs::responses::signable_data::SignableData;
 
 #[derive(Debug, PartialEq, Eq)]

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+
 use crate::data_structs::app_credentials::AppCredentials;
 
 #[derive(Debug, PartialEq)]

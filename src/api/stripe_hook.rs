@@ -1,5 +1,6 @@
 use actix_web::{HttpRequest, HttpResponse, post, web};
-use stripe::{CheckoutSession, CheckoutSessionItem, CheckoutSessionItemId, CheckoutSessionPaymentStatus, EventObject, EventType, Webhook, WebhookError};
+use stripe::{CheckoutSession, CheckoutSessionPaymentStatus, EventObject, EventType, Webhook};
+
 use crate::SharedResources;
 
 #[post("webhook")]

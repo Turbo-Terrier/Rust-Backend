@@ -1,6 +1,5 @@
 use actix_web::{get, HttpRequest, HttpResponse, post, Responder, web};
-use actix_web::web::Buf;
-use crate::data_structs::bu_course::BUCourse;
+
 use crate::data_structs::device_meta::DeviceMeta;
 use crate::data_structs::grant_level::GrantLevel;
 use crate::data_structs::requests::application_start::ApplicationStart;

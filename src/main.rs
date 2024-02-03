@@ -1,3 +1,31 @@
+use std::fs::File;
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
+
+use actix_cors::Cors;
+use actix_web::{App, Handler, HttpServer, Responder, web};
+use actix_web::middleware::Logger;
+use actix_web::rt::time;
+use env_logger::Env;
+use futures::FutureExt;
+use lettre::SmtpTransport;
+use ring::signature::KeyPair;
+use sqlx::{Database, Executor};
+use untrusted::{self};
+use yaml_rust::{Yaml, YamlLoader};
+use yaml_rust::yaml::Array;
+
+use api::app_api;
+use api::web_api;
+use database::DatabasePool;
+use encrypted_signing::Ed25519SecretKey;
+use google_oauth::GoogleClientSecretWrapper;
+
+use crate::api::stripe_hook;
+use crate::encrypted_signing::JWTSecretKey;
+use crate::google_oauth::GoogleClientSecret;
+use crate::stripe_util::{StripeHandler, TieredPrice};
+
 pub mod database;
 mod encrypted_signing;
 mod smtp_mailing_util;
@@ -30,34 +58,6 @@ pub mod data_structs {
 
 pub mod api;
 
-
-use std::fs::File;
-use database::DatabasePool;
-use std::io::{Read, Write};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
-use actix_cors::Cors;
-use yaml_rust::{Yaml, YamlLoader};
-use actix_web::{App, Handler, http, HttpServer, middleware, Responder, web};
-use actix_web::middleware::Logger;
-use actix_web::rt::time;
-use env_logger::Env;
-use futures::FutureExt;
-use lettre::SmtpTransport;
-use sqlx::{Database, Executor};
-use ring::signature::KeyPair;
-use stripe::Client;
-use untrusted::{self};
-use yaml_rust::yaml::Array;
-use api::app_api;
-use encrypted_signing::Ed25519SecretKey;
-use google_oauth::GoogleClientSecretWrapper;
-use api::web_api;
-use crate::api::stripe_hook;
-use crate::data_structs::semester::Semester;
-use crate::encrypted_signing::JWTSecretKey;
-use crate::google_oauth::GoogleClientSecret;
-use crate::stripe_util::{StripeHandler, TieredPrice};
 
 #[derive(Clone)]
 pub struct SharedResources {

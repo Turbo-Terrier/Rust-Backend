@@ -1,9 +1,8 @@
-use actix_web::App;
 use serde::{Deserialize, Serialize};
-use sqlx::{Decode, MySql, Pool, Row, Type};
 use sqlx::mysql::MySqlRow;
-use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
-use crate::database::DatabasePool;
+use sqlx::Row;
+
+use crate::data_structs::bu_course::BUCourseSection;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[derive(Eq, PartialEq)]
