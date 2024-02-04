@@ -177,13 +177,14 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    // course_list_scraper::get_sites(&copied_resource_2.database, true).await;
+    course_list_scraper::get_summer_sites(&copied_resource_2.database).await;
+    // course_list_scraper::get_sites(&copied_resource_2.database).await;
     // println!("Starting course scraping task");
     // tokio::spawn(async move {
     //     let mut interval = time::interval(Duration::from_secs(3600));
     //     loop {
     //         let cleanup_start_time = Instant::now();
-    //         course_list_scraper::get_sites(&copied_resource_2.database, true).await;
+    //         course_list_scraper::get_sites(&copied_resource_2.database).await;
     //         let task_time = cleanup_start_time.elapsed().as_millis();
     //         // as the database grows, this task will take longer to complete
     //         // if it takes longer than 9 seconds, we should warn ourselves

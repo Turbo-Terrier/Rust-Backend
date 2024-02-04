@@ -1,4 +1,6 @@
-use scraper::{ElementRef, Selector};
+use regex::Regex;
+use scraper::{CaseSensitivity, Element, ElementRef, Selector};
+use scraper::selector::CssLocalName;
 
 use crate::data_structs::bu_course::CourseSection;
 use crate::data_structs::semester::{Semester, SemesterSeason};
@@ -6,8 +8,101 @@ use crate::database::DatabasePool;
 
 const BU_URL: &str = "https://www.bu.edu";
 const COURSE_CATALOG_URL: &str = "/phpbin/course-search/search.php?page=w0&pagesize=100000&yearsem_adv=2024-SPRG";
+const SUMMER_COURSE_CATALOG_URL: &str = "/summer/courses/results.php?keywords=&session=SUM1&time=&credits=&level=&college=&department=&course_num=";
 
-pub async fn get_sites(database: &DatabasePool, search_sections_for_existing_courses: bool) {
+// todo: finish, SUMMER_COURSE_CATALOG_URL only displays 100 courses max
+
+pub async fn get_summer_sites(database: &DatabasePool) {
+    let div_selector: Selector = Selector::parse("div").unwrap();
+    let course_list_selector: Selector = Selector::parse("li.course").unwrap();
+    let course_title_selector: Selector = Selector::parse("h4.courses-name").unwrap();
+    let course_code_selector: Selector = Selector::parse("p.course-id").unwrap();
+    let course_info_selector: Selector = Selector::parse("p.course-info").unwrap();
+    let course_term_selector: Selector = Selector::parse("p.courses-term").unwrap();
+    let course_sections_selector: Selector = Selector::parse("div.sections").unwrap();
+    let course_sections_schedule_container: Selector = Selector::parse("div.section_schedules_container").unwrap();
+    let course_section_instructor_selector: Selector = Selector::parse("div.instructor_name").unwrap();
+    let course_section_notes_selector: Selector = Selector::parse("div.section_regular_notes_container").unwrap();
+
+    let course_credit_regex = Regex::new(r"(\d+)\s*cr\.").unwrap();
+    let course_term_dates_regex = Regex::new(r"\(([^)]+)\)").unwrap();
+
+    let result = reqwest::get(BU_URL.to_owned() + SUMMER_COURSE_CATALOG_URL).await;
+    if result.is_ok() {
+        let result = result.unwrap();
+        let text_resp = result.text().await;
+        if text_resp.is_ok() {
+            let text_resp = text_resp.unwrap();
+            let html_document = scraper::Html::parse_document(text_resp.as_str());
+            let course_iter = html_document.select(&course_list_selector).into_iter();
+            for course in course_iter {
+                let course_code: &str = course.select(&course_code_selector).next().unwrap().text().next().unwrap();
+                let course_name: &str = course.select(&course_title_selector).next().unwrap().text().next().unwrap();
+                let course_info: &str = course.select(&course_info_selector).next().unwrap().text().next().unwrap();
+                let credits: Option<u8> = course_credit_regex
+                    .captures(course_info)
+                    .and_then(|captures| captures.get(1))
+                    .and_then(|credits| credits.as_str().parse().ok());
+                let course_term_raw_string: &str = course.select(&course_term_selector).next().unwrap().text().next().unwrap();
+                let course_dates: Option<String> = course_term_dates_regex
+                    .captures(course_term_raw_string)
+                    .and_then(|captures| captures.get(1))
+                    .and_then(|credits| credits.as_str().parse().ok());
+
+                let sections = course.select(&course_sections_selector).into_iter();
+                let mut course_sections_vec = Vec::new();
+
+                for section in sections {
+                    let instructor = course.select(&course_section_instructor_selector)
+                        .next()
+                        .and_then(|element| element.text().next())
+                        .map(|text| text.to_string());
+                    let notes = course.select(&course_section_notes_selector)
+                        .next()
+                        .and_then(|element| element.text().next())
+                        .map(|text| text.to_string());
+                    let section: String;
+                    let course_type: Option<String>;
+                    let course_schedule: Option<String>;
+                    let schedule_container = course.select(&course_sections_schedule_container).next().unwrap();
+                    let mut schedule_string: String = schedule_container.select(&div_selector).next().unwrap().text().next().map_or(String::new(), |s| s.to_string());
+                    let mut parts = schedule_string.split_whitespace();
+                    section = parts.next().unwrap().to_string();
+                    course_type = parts.next().map(|s| s.trim_end().trim_start().to_string());
+                    course_schedule = {
+                        let schedule_str = parts.collect::<Vec<&str>>().join(" ");
+                        if (schedule_str.is_empty()) {
+                            None
+                        } else {
+                            Some(schedule_str)
+                        }
+                    };
+
+                    let course_section = CourseSection{
+                        section,
+                        open_seats: None,
+                        instructor,
+                        section_type: course_type,
+                        location: None,  //todo
+                        schedule: course_schedule,
+                        dates: course_dates.clone(),
+                        notes,
+                    };
+                    course_sections_vec.push(course_section);
+                }
+
+                // todo hard coded rn
+                let semester = Semester {
+                    semester_season: SemesterSeason::Summer1,
+                    semester_year: 2024,
+                };
+                database.add_course(&semester, course_code, Some(course_name.to_string()), credits, true, course_sections_vec).await;
+            }
+        }
+    }
+}
+
+pub async fn get_sites(database: &DatabasePool) {
 
     let course_list_selector: Selector = Selector::parse("li.coursearch-result").unwrap();
     let course_heading_div_select: Selector = Selector::parse("div.coursearch-result-heading").unwrap();

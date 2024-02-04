@@ -830,7 +830,7 @@ impl DatabasePool {
                     credits               tinyint                                        null,
                     existance_confirmed   tinyint(1)                                     not null,
                     added_timestamp       bigint                                         not null,
-                    unique key (college, department, course_code)
+                    unique key (semester_season, semester_year, college, department, course_code)
                 );
         "#).await
     }
