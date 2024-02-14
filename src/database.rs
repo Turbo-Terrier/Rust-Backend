@@ -6,7 +6,6 @@ use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult, MySqlRow};
 
 use crate::data_structs::app_config::UserApplicationSettings;
-use crate::data_structs::app_credentials::AppCredentials;
 use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
 use crate::data_structs::bu_course::CourseSection;
 use crate::data_structs::device_meta::DeviceMeta;
@@ -46,13 +45,29 @@ impl DatabasePool {
         Self::create_tables(&self).await;
     }
 
-    pub async fn is_authenticated(&self, kerberos_username: &String, auth_key: &String) -> bool {
-        let result = sqlx::query("SELECT * from users WHERE kerberos_username=? AND authentication_key=?")
-            .bind(&kerberos_username)
+    pub async fn get_all_course_departments(&self) -> Vec<String> {
+        let results = sqlx::query("SELECT DISTINCT department FROM course_catalog;")
+            .fetch_all(&self.pool).await.expect("Error fetching rows for the get_all_course_departments query");
+        let mut departments: Vec<String> = Vec::new();
+        for result in &results {
+            let department = result.get_unchecked::<String, &str>("department");
+            departments.push(department);
+        }
+        return departments;
+    }
+
+    pub async fn is_authenticated(&self, auth_key: &String) -> Option<String> {
+        let result = sqlx::query("SELECT kerberos_username from users WHERE authentication_key=?")
             .bind(&auth_key)
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the is_authenticated query");
-        return !result.is_empty();
+        if !result.is_empty() {
+            let row = result.get(0).unwrap();
+            let kerberos_username = row.get_unchecked::<String, &str>("kerberos_username");
+            return Option::from(kerberos_username);
+        } else {
+            return None;
+        }
     }
 
     pub async fn mark_demo_over(&self, kerberos_username: &String) {
@@ -81,7 +96,7 @@ impl DatabasePool {
     }
 
 
-    pub async fn mark_course_registered(&self, kerberos_username: &str, session_id: i64, registration_timestamp: i64, course_id: u32, course_section: &str) -> bool {
+    pub async fn mark_course_registered(&self, kerberos_username: &String, session_id: i64, registration_timestamp: i64, course_id: u32, course_section: &str) -> bool {
         // sanity check to ensure session is alive
         if !Self::is_session_alive(&self, session_id).await {
             return false;
@@ -145,14 +160,14 @@ impl DatabasePool {
         return Ok("OK")
     }
 
-    pub async fn create_session(&self, session_data: &ApplicationStart, grant_level: &GrantLevel) -> i64 {
+    pub async fn create_session(&self, session_data: &ApplicationStart, kerberos_username: &String, grant_level: &GrantLevel) -> i64 {
         // write the session data to the database and return the session_id key
         let result = sqlx::query(
             r#"INSERT INTO application_launch_session
-                (kerberos_username, device_ip, device_os, system_arch,
+                (kerberos_username, device_ip, device_name, device_os, system_arch,
                 device_cores, device_clock_speed, grant_type, launch_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
-            .bind(&session_data.credentials.kerberos_username)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#)
+            .bind(kerberos_username)
             .bind(&session_data.device_meta.ip)
             .bind(&session_data.device_meta.name)
             .bind(&session_data.device_meta.os)
@@ -166,16 +181,18 @@ impl DatabasePool {
 
         let session_id = result.last_insert_id() as i64;
 
+        let courses = self.get_user_application_courses(kerberos_username).await;
+
         // write the courses to the database as well
-        for (course_id, course_section) in &session_data.target_courses {
+        for bu_course_section in &courses {
             sqlx::query(r#"
                 INSERT INTO app_session_courses
                 (session_id, course_id, course_section)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?)
             "#)
                 .bind(&session_id)
-                .bind(course_id)
-                .bind(course_section)
+                .bind(&bu_course_section.course.course_id)
+                .bind(&bu_course_section.section.section)
                 .execute(&self.pool).await
                 .expect("Error executing the create_session query");
         }
@@ -421,7 +438,7 @@ impl DatabasePool {
     pub async fn cleanup_dead_sessions(&self) {
 
         let to_update = sqlx::query("SELECT session_id FROM application_launch_session WHERE last_ping < ? AND is_active=1")
-            .bind(chrono::Local::now().timestamp() - 50) // close all sessions where no ping was received for 50sec
+            .bind(chrono::Local::now().timestamp() - 45) // close all sessions where no ping was received for 45sec
             .fetch_all(&self.pool).await
             .expect("Error executing the selection cleanup_dead_sessions query");
 
@@ -430,7 +447,7 @@ impl DatabasePool {
 
             // first, insert a session terminate entry
             Self::end_session(&self, &ApplicationStopped {
-                credentials: AppCredentials { kerberos_username: "".to_string(), authentication_key: "".to_string() }, // this field isn't used soo...
+                license_key: String::new(), // this field isn't used soo I can just makeup data
                 session_id: session_id,
                 did_finish: false,
                 unknown_crash_occurred: Option::Some(true),
@@ -636,9 +653,7 @@ impl DatabasePool {
                     SELECT * from course_catalog cc
                     INNER JOIN course_sections_catalog csc on cc.course_id = csc.course_id
                         WHERE semester_season=? AND
-                            semester_year=? AND
-                            cc.existance_confirmed=1 AND
-                            csc.existance_confirmed=1;
+                            semester_year=?;
                 "#)
             .bind(&semester.semester_season.to_string())
             .bind(&semester.semester_year)
@@ -646,62 +661,22 @@ impl DatabasePool {
             .expect("Error fetching rows for the search_course query");
 
         for result in &results {
-            let course_id = result.get_unchecked::<u32, &str>("course_id");
-            let semester_season = result.get_unchecked::<SemesterSeason, &str>("semester_season");
-            let semester_year = result.get_unchecked::<u16, &str>("semester_year");
-            let college = result.get_unchecked::<String, &str>("college");
-            let department = result.get_unchecked::<String, &str>("department");
-            let course_code = result.get_unchecked::<String, &str>("course_code");
-            let title = result.get_unchecked::<Option<String>, &str>("title");
-            let credits = result.get_unchecked::<Option<u8>, &str>("credits");
-            let section = result.get_unchecked::<String, &str>("course_section");
-            let open_seats = result.get_unchecked::<Option<u8>, &str>("open_seats");
-            let instructor = result.get_unchecked::<Option<String>, &str>("instructor");
-            let section_type = result.get_unchecked::<Option<String>, &str>("section_type");
-            let location = result.get_unchecked::<Option<String>, &str>("location");
-            let schedule = result.get_unchecked::<Option<String>, &str>("schedule");
-            let dates = result.get_unchecked::<Option<String>, &str>("dates");
-            let notes = result.get_unchecked::<Option<String>, &str>("notes");
-
-            output.push(BUCourseSection {
-                course: BUCourse {
-                    course_id: course_id,
-                    semester: Semester {
-                        semester_season: semester_season,
-                        semester_year: semester_year
-                    },
-                    college: college,
-                    department: department,
-                    course_code: course_code,
-                    title: title.clone(),
-                    credits: credits,
-                },
-                section: CourseSection {
-                    section: section,
-                    open_seats: open_seats,
-                    instructor: instructor,
-                    section_type: section_type,
-                    location: location,
-                    schedule: schedule,
-                    dates: dates,
-                    notes: notes,
-                },
-            });
+            output.push(BUCourseSection::decode(result).unwrap());
         }
 
         return output;
     }
 
     // course added by the scrapper are "confirmed to exist"
-    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, existance_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
+    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, existence_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
         println!("ADDING {} - {:?} | {:?}", course_code, course_title, &sections);
         let (college, department, code) = BUCourse::from_course_code_str(course_code);
 
         let result = sqlx::query(r#"
-            INSERT IGNORE INTO course_catalog
-            (semester_season, semester_year, college, department, course_code, title, credits, existance_confirmed, added_timestamp)
+            INSERT INTO course_catalog
+            (semester_season, semester_year, college, department, course_code, title, credits, course_existence, added_timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE title=VALUES(title), credits=VALUES(credits), existance_confirmed=VALUES(existance_confirmed)
+            ON DUPLICATE KEY UPDATE title=VALUES(title), credits=VALUES(credits), course_existence=VALUES(course_existence)
         "#)
             .bind(&semester.semester_season.to_string())
             .bind(&semester.semester_year)
@@ -710,15 +685,17 @@ impl DatabasePool {
             .bind(code)
             .bind(&course_title)
             .bind(&credits)
-            .bind(&existance_confirmed)
+            .bind(&existence_confirmed)
             .bind(&chrono::Local::now().timestamp())
             .execute(&self.pool).await
             .expect("Error executing the add_course query");
 
         // retrieve insert (or updated) id todo make unsigned
         let course_id: u32 = sqlx::query_scalar(r#"
-                SELECT course_id FROM course_catalog WHERE college=? AND department=? AND course_code=?;
+                SELECT course_id FROM course_catalog WHERE semester_season=? AND semester_year=? AND college=? AND department=? AND course_code=?;
             "#)
+            .bind(&semester.semester_season.to_string())
+            .bind(&semester.semester_year)
             .bind(college)
             .bind(department)
             .bind(code)
@@ -728,7 +705,7 @@ impl DatabasePool {
         for section in &sections {
             sqlx::query(r#"
                 INSERT INTO course_sections_catalog
-                (course_id, course_section, open_seats, instructor, section_type, location, schedule, dates, notes, existance_confirmed, added_timestamp)
+                (course_id, course_section, open_seats, instructor, section_type, location, schedule, dates, notes, section_existence, added_timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
                 open_seats=VALUES(open_seats), instructor=VALUES(instructor), section_type=VALUES(section_type),
                 location=VALUES(location), schedule=VALUES(schedule), dates=VALUES(dates), notes=VALUES(notes)
@@ -742,7 +719,7 @@ impl DatabasePool {
                 .bind(&section.schedule)
                 .bind(&section.dates)
                 .bind(&section.notes)
-                .bind(&existance_confirmed)
+                .bind(&existence_confirmed)
                 .bind(&chrono::Local::now().timestamp())
                 .execute(&self.pool).await
                 .expect("Error executing the add_course query");
@@ -764,7 +741,8 @@ impl DatabasePool {
                     title: course_title.clone(),
                     credits,
                 },
-                section: course_section
+                section: course_section,
+                existence_confirmed
             };
             bu_course_sections.push(bu_course_section);
         }
@@ -789,10 +767,8 @@ impl DatabasePool {
             .expect("An error occurred create the 'user_purchase_sessions' table");
         Self::create_user_application_settings_table(&self).await
             .expect("An error occurred create the 'user_application_settings' table");
-        Self::create_application_course_settings_table(&self).await
-            .expect("An error occurred create the 'user_application_course_settings' table");
         Self::create_user_application_course_settings(&self).await
-            .expect("An error occurred create the 'known_courses' table");
+            .expect("An error occurred create the 'user_application_course_settings' table");
     }
 
     async fn create_course_section_catalog_tables(&self) -> Result<MySqlQueryResult, Error> {
@@ -808,7 +784,7 @@ impl DatabasePool {
                 schedule              varchar(64)  null,
                 dates                 varchar(64)  null,
                 notes                 varchar(256) null,
-                existance_confirmed   tinyint(1)   not null,
+                section_existence     tinyint(1)   not null,
                 added_timestamp       bigint       not null,
                 foreign key (course_id) references course_catalog (course_id),
                 primary key (course_id, course_section)
@@ -828,7 +804,7 @@ impl DatabasePool {
                     course_code           char(3)                                     not null,
                     title                 varchar(256)                                   null,
                     credits               tinyint                                        null,
-                    existance_confirmed   tinyint(1)                                     not null,
+                    course_existence      tinyint(1)                                     not null,
                     added_timestamp       bigint                                         not null,
                     unique key (semester_season, semester_year, college, department, course_code)
                 );
@@ -847,19 +823,6 @@ impl DatabasePool {
                 foreign key (kerberos_username)
                     references users (kerberos_username),
                 primary key  (kerberos_username, course_id, course_section)
-            );
-        "#).await
-    }
-
-    async fn create_application_course_settings_table(&self) -> Result<MySqlQueryResult, Error> {
-        self.pool.execute(r#"
-            create table if not exists user_application_course_settings
-            (
-                kerberos_username varchar(64)                                   not null
-                    references users (kerberos_username),
-                course_id           int unsigned                               not null,
-                course_section      varchar(6)                                  not null,
-                primary key (kerberos_username, course_id, course_section)
             );
         "#).await
     }
@@ -941,7 +904,7 @@ impl DatabasePool {
             session_id         int auto_increment,
             kerberos_username  varchar(64)                               not null,
             device_ip          varchar(16)                               null,
-            device_name        varchar(32)                               null,
+            device_name        varchar(64)                               null,
             device_os          varchar(32)                               null,
             system_arch        varchar(32)                               null,
             device_cores       smallint                                  null,

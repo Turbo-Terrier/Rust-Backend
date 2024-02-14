@@ -21,7 +21,8 @@ pub struct BUCourse {
 #[derive(Clone)]
 pub struct BUCourseSection {
     pub course: BUCourse,
-    pub section: CourseSection
+    pub section: CourseSection,
+    pub existence_confirmed: bool
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,6 +45,8 @@ impl BUCourseSection {
         Ok(BUCourseSection {
             course: BUCourse::decode(row)?,
             section: CourseSection::decode(row)?,
+            existence_confirmed: row.try_get::<bool, &str>("section_existence")?
+                && row.try_get::<bool, &str>("course_existence")?
         })
     }
 }

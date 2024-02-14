@@ -1,4 +1,6 @@
+use std::fmt::format;
 use regex::Regex;
+use reqwest::Response;
 use scraper::{CaseSensitivity, Element, ElementRef, Selector};
 use scraper::selector::CssLocalName;
 
@@ -7,19 +9,27 @@ use crate::data_structs::semester::{Semester, SemesterSeason};
 use crate::database::DatabasePool;
 
 const BU_URL: &str = "https://www.bu.edu";
+// TODO: catalog hard coded for now
 const COURSE_CATALOG_URL: &str = "/phpbin/course-search/search.php?page=w0&pagesize=100000&yearsem_adv=2024-SPRG";
-const SUMMER_COURSE_CATALOG_URL: &str = "/summer/courses/results.php?keywords=&session=SUM1&time=&credits=&level=&college=&department=&course_num=";
 
-// todo: finish, SUMMER_COURSE_CATALOG_URL only displays 100 courses max
+pub async fn get_summer_courses(database: &DatabasePool) {
+    // todo get depts from here: https://www.bu.edu/summer/registration/course-codes-numbers/
+    let departments = database.get_all_course_departments().await;
+    for department in departments {
+        for session in vec!["SUM1", "SUM2"] {
+            get_summer_sites_for_department(database, session, department.clone()).await;
+        }
+    }
+}
 
-pub async fn get_summer_sites(database: &DatabasePool) {
+async fn get_summer_sites_for_department(database: &DatabasePool, summer_session: &str, department: String) {
     let div_selector: Selector = Selector::parse("div").unwrap();
     let course_list_selector: Selector = Selector::parse("li.course").unwrap();
     let course_title_selector: Selector = Selector::parse("h4.courses-name").unwrap();
     let course_code_selector: Selector = Selector::parse("p.course-id").unwrap();
     let course_info_selector: Selector = Selector::parse("p.course-info").unwrap();
     let course_term_selector: Selector = Selector::parse("p.courses-term").unwrap();
-    let course_sections_selector: Selector = Selector::parse("div.sections").unwrap();
+    let course_sections_selector: Selector = Selector::parse("div.section_info_container").unwrap();
     let course_sections_schedule_container: Selector = Selector::parse("div.section_schedules_container").unwrap();
     let course_section_instructor_selector: Selector = Selector::parse("div.instructor_name").unwrap();
     let course_section_notes_selector: Selector = Selector::parse("div.section_regular_notes_container").unwrap();
@@ -27,7 +37,12 @@ pub async fn get_summer_sites(database: &DatabasePool) {
     let course_credit_regex = Regex::new(r"(\d+)\s*cr\.").unwrap();
     let course_term_dates_regex = Regex::new(r"\(([^)]+)\)").unwrap();
 
-    let result = reqwest::get(BU_URL.to_owned() + SUMMER_COURSE_CATALOG_URL).await;
+    let url = format!("/summer/courses/results.php?keywords=&session={}&time=&credits=&level=&college=&department={}&course_num=", summer_session, department);
+
+    let result = reqwest::get(BU_URL.to_owned() + url.as_str()).await;
+
+    println!("{}", BU_URL.to_owned() + url.as_str());
+
     if result.is_ok() {
         let result = result.unwrap();
         let text_resp = result.text().await;
@@ -51,24 +66,23 @@ pub async fn get_summer_sites(database: &DatabasePool) {
 
                 let sections = course.select(&course_sections_selector).into_iter();
                 let mut course_sections_vec = Vec::new();
-
                 for section in sections {
-                    let instructor = course.select(&course_section_instructor_selector)
+                    let instructor = section.select(&course_section_instructor_selector)
                         .next()
                         .and_then(|element| element.text().next())
                         .map(|text| text.to_string());
-                    let notes = course.select(&course_section_notes_selector)
+                    let notes = section.select(&course_section_notes_selector)
                         .next()
                         .and_then(|element| element.text().next())
                         .map(|text| text.to_string());
-                    let section: String;
+                    let course_section: String;
                     let course_type: Option<String>;
                     let course_schedule: Option<String>;
-                    let schedule_container = course.select(&course_sections_schedule_container).next().unwrap();
+                    let schedule_container = section.select(&course_sections_schedule_container).next().unwrap();
                     let mut schedule_string: String = schedule_container.select(&div_selector).next().unwrap().text().next().map_or(String::new(), |s| s.to_string());
                     let mut parts = schedule_string.split_whitespace();
-                    section = parts.next().unwrap().to_string();
-                    course_type = parts.next().map(|s| s.trim_end().trim_start().to_string());
+                    course_section = parts.next().unwrap().to_string();
+                    course_type = parts.next().map(|s| s.replace("(", "").replace(")", "").to_string());
                     course_schedule = {
                         let schedule_str = parts.collect::<Vec<&str>>().join(" ");
                         if (schedule_str.is_empty()) {
@@ -78,8 +92,8 @@ pub async fn get_summer_sites(database: &DatabasePool) {
                         }
                     };
 
-                    let course_section = CourseSection{
-                        section,
+                    let course_section = CourseSection {
+                        section: course_section,
                         open_seats: None,
                         instructor,
                         section_type: course_type,
@@ -91,15 +105,17 @@ pub async fn get_summer_sites(database: &DatabasePool) {
                     course_sections_vec.push(course_section);
                 }
 
-                // todo hard coded rn
                 let semester = Semester {
-                    semester_season: SemesterSeason::Summer1,
-                    semester_year: 2024,
+                    semester_season: if summer_session == "SUM1" {SemesterSeason::Summer1} else {SemesterSeason::Summer2},
+                    semester_year: 2024, //todo
                 };
                 database.add_course(&semester, course_code, Some(course_name.to_string()), credits, true, course_sections_vec).await;
             }
         }
+    } else {
+        println!("Error getting summer courses for department={}", department);
     }
+
 }
 
 pub async fn get_sites(database: &DatabasePool) {
@@ -125,7 +141,7 @@ pub async fn get_sites(database: &DatabasePool) {
                 let heading_div = course.select(&course_heading_div_select).next().unwrap();
                 let content_div = course.select(&course_description_div_select).next().unwrap();
                 let course_code: &str = heading_div.select(&heading_course_code_selector).next().unwrap().text().next().unwrap();
-                let course_name: &str = heading_div.select(&heading_course_name_selector).next().unwrap().text().next().unwrap();
+                let course_name: &str = heading_div.select(&heading_course_name_selector).next().unwrap().text().next().unwrap().trim();
 
                 let course_credits: Option<u8> = content_div.select(&heading_course_desc_and_credit).last().map(|cred_str| {
                     cred_str.text()

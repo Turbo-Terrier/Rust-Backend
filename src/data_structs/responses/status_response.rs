@@ -33,9 +33,7 @@ impl StatusResponse {
 }
 
 impl SignableData for StatusResponse {
-    fn string_to_sign(&self) -> String {
-        format!("{},{},{},{}", self.kerberos_username, self.status.to_string(), self.reason, self.response_timestamp)
-    }
+
 }
 
 impl ResponseStatus {

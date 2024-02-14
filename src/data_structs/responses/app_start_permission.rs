@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::data_structs::app_config::UserApplicationSettings;
 
 use crate::data_structs::grant_level::GrantLevel;
 use crate::data_structs::responses::signable_data::SignableData;
@@ -8,6 +9,7 @@ use crate::data_structs::responses::signable_data::SignableData;
 pub struct ApplicationStartPermission {
     kerberos_username: String,
     membership_level: GrantLevel,
+    user_app_settings: UserApplicationSettings,
     session_id: i64,
     response_timestamp: i64,
 }
@@ -20,13 +22,11 @@ pub struct SignedApplicationStartPermission {
 }
 
 impl ApplicationStartPermission {
-    pub fn new(kerberos_username: String, membership_level: GrantLevel, session_id: i64, response_timestamp: i64) -> Self {
-        Self { kerberos_username, membership_level, session_id, response_timestamp }
+    pub fn new(kerberos_username: String, membership_level: GrantLevel, user_app_settings: UserApplicationSettings, session_id: i64, response_timestamp: i64) -> Self {
+        Self { kerberos_username, membership_level, user_app_settings, session_id, response_timestamp }
     }
 }
 
 impl SignableData for ApplicationStartPermission {
-    fn string_to_sign(&self) -> String {
-        format!("{},{},{},{}", self.kerberos_username, self.membership_level.to_string(), self.session_id, self.response_timestamp)
-    }
+
 }

@@ -1,11 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::data_structs::app_credentials::AppCredentials;
-
 #[derive(Debug, PartialEq)]
 #[derive(Deserialize, Serialize)]
 pub struct ApplicationStopped {
-    pub credentials: AppCredentials,
+    pub license_key: String,
     pub session_id: i64,
     pub did_finish: bool,
     pub unknown_crash_occurred: Option<bool>,

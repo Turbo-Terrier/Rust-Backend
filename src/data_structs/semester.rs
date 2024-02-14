@@ -4,16 +4,34 @@ use std::str::FromStr;
 
 use chrono::{Datelike, Duration, NaiveDate, TimeZone};
 use serde::{Deserialize, Serialize};
-use sqlx::{Decode, Encode, Row};
+use sqlx::{Decode, Encode, MySql, Row, Type};
+use sqlx::mysql::{MySqlTypeInfo, MySqlValueRef};
 
 #[derive(Debug, PartialEq, Eq)]
-#[derive(Deserialize, Serialize, sqlx::Type)]
+#[derive(Deserialize, Serialize)]
 #[derive(Clone)]
 pub enum SemesterSeason {
     Summer1,
     Summer2,
     Fall,
     Spring
+}
+
+impl Decode<'_, MySql> for SemesterSeason {
+    fn decode(value: MySqlValueRef<'_>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let s = <&str as Decode<MySql>>::decode(value)?;
+        SemesterSeason::from_str(s).map_err(|_| "Failed to decode SemesterSeason".into())
+    }
+}
+
+impl Type<MySql> for SemesterSeason {
+    fn type_info() -> MySqlTypeInfo {
+        <&str as Type<MySql>>::type_info()
+    }
+
+    fn compatible(ty: &MySqlTypeInfo) -> bool {
+        <&str as Type<MySql>>::compatible(ty)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -252,19 +270,20 @@ impl SemesterSeason {
 
 }
 
-impl ToString for SemesterSeason {
-    fn to_string(&self) -> String {
-        match self {
+impl Display for SemesterSeason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
             SemesterSeason::Summer1 => "Summer 1".to_string(),
             SemesterSeason::Summer2 => "Summer 2".to_string(),
             SemesterSeason::Fall => "Fall".to_string(),
             SemesterSeason::Spring => "Spring".to_string(),
-        }
+        };
+        write!(f, "{}", str)
     }
 }
 
 impl FromStr for SemesterSeason {
-    type Err = SemesterParseError;
+    type Err = (SemesterParseError);
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lower_season = s.replace(" ", "").to_lowercase();

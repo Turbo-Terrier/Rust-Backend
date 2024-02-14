@@ -373,7 +373,6 @@ pub async fn get_available_courses(data: web::Data<SharedResources>, req: HttpRe
         return HttpResponse::Unauthorized().json("Invalid");
     }
 
-    // todo fix this, hard coded for now
     let courses = database.get_courses(&info.into_inner()).await;
 
     HttpResponse::Ok()

@@ -37,7 +37,6 @@ pub mod data_structs {
     pub mod user;
     pub mod semester;
     pub mod device_meta;
-    pub mod app_credentials;
     pub mod bu_course;
     pub mod grant_level;
     pub mod app_config;
@@ -163,7 +162,7 @@ async fn main() -> std::io::Result<()> {
 
     println!("Starting cleanup task");
     tokio::spawn(async move {
-        let mut interval = time::interval(Duration::from_millis(10000));
+        let mut interval = time::interval(Duration::from_millis(5000));
         loop {
             let cleanup_start_time = Instant::now();
             copied_resource_1.database.cleanup_dead_sessions().await;
@@ -177,8 +176,9 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    course_list_scraper::get_summer_sites(&copied_resource_2.database).await;
-    // course_list_scraper::get_sites(&copied_resource_2.database).await;
+    // MUST get normal courses before summer courses TODO: better way of getting summer depts
+    //course_list_scraper::get_sites(&copied_resource_2.database).await;
+    course_list_scraper::get_summer_courses(&copied_resource_2.database).await;
     // println!("Starting course scraping task");
     // tokio::spawn(async move {
     //     let mut interval = time::interval(Duration::from_secs(3600));
@@ -208,7 +208,6 @@ async fn main() -> std::io::Result<()> {
             .service(web::scope("/api/app/v1")
                 .service(app_api::app_start)
                 .service(app_api::app_stop)
-                .service(app_api::send_mail)
                 .service(app_api::course_registered)
                 .service(app_api::ping)
                 .service(app_api::debug_ping)
