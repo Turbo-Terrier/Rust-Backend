@@ -116,12 +116,29 @@ impl DatabasePool {
             .execute(&self.pool).await
             .expect("Error executing the mark_course_registered query 1");
 
+        // check if this was a planner session and only subtract credits if this was a real registration
+        let result: Vec<MySqlRow> = sqlx::query(r#"
+            SELECT planner_session from application_launch_session WHERE session_id=?
+        "#).bind(&session_id)
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the mark_course_registered query 2");
+
+        if result.is_empty() {
+            eprintln!("Error, session not found but this should never happen!");
+            return false;
+        }
+
+        let planner_session: bool = result.get(0).unwrap().get_unchecked::<bool, &str>("planner_session");
+        if planner_session {
+            return true;
+        }
+
         sqlx::query(r#"
-            UPDATE users SET current_credits=MIN(0,current_credits-1) WHERE kerberos_username=?;
+            UPDATE users SET current_credits=GREATEST(0,current_credits-1) WHERE kerberos_username=?;
         "#)
             .bind(kerberos_username)
             .execute(&self.pool).await
-            .expect("Error executing the mark_course_registered query 2");
+            .expect("Error executing the mark_course_registered query 3");
 
         return true;
     }
@@ -160,13 +177,13 @@ impl DatabasePool {
         return Ok("OK")
     }
 
-    pub async fn create_session(&self, session_data: &ApplicationStart, kerberos_username: &String, grant_level: &GrantLevel) -> i64 {
+    pub async fn create_session(&self, session_data: &ApplicationStart, kerberos_username: &String, grant_level: &GrantLevel, planner_session: bool) -> i64 {
         // write the session data to the database and return the session_id key
         let result = sqlx::query(
             r#"INSERT INTO application_launch_session
                 (kerberos_username, device_ip, device_name, device_os, system_arch,
-                device_cores, device_clock_speed, grant_type, launch_time)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#)
+                device_cores, device_clock_speed, grant_type, planner_session, launch_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#)
             .bind(kerberos_username)
             .bind(&session_data.device_meta.ip)
             .bind(&session_data.device_meta.name)
@@ -175,6 +192,7 @@ impl DatabasePool {
             .bind(&session_data.device_meta.core_count)
             .bind(&session_data.device_meta.cpu_speed)
             .bind(&grant_level.to_string())
+            .bind(&planner_session)
             .bind(chrono::Local::now().timestamp())
             .execute(&self.pool).await
             .expect("Error executing the create_session query");
@@ -803,7 +821,7 @@ impl DatabasePool {
                     department            char(2)                                     not null,
                     course_code           char(3)                                     not null,
                     title                 varchar(256)                                   null,
-                    credits               tinyint                                        null,
+                    credits               tinyint unsigned                               null,
                     course_existence      tinyint(1)                                     not null,
                     added_timestamp       bigint                                         not null,
                     unique key (semester_season, semester_year, college, department, course_code)
@@ -910,6 +928,7 @@ impl DatabasePool {
             device_cores       smallint                                  null,
             device_clock_speed float                                     null,
             grant_type         enum('Full', 'Partial', 'Demo', 'Expired', 'Error')  not null,
+            planner_session    tinyint(1)                                not null,
             launch_time        bigint                                    not null,
             is_active          tinyint(1)                                default 1 not null,
             last_ping          bigint default unix_timestamp()           not null,

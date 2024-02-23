@@ -136,7 +136,9 @@ pub async fn create_checkout_session(data: web::Data<SharedResources>, req: Http
         return HttpResponse::Unauthorized().json("Invalid");
     }
 
-    let quantity = info.into_inner().0;
+    let mut quantity = info.into_inner().0;
+    // make sure quantity is between 1-16 and if its not min/max it
+    quantity = quantity.min(1).max(16);
     let user = user.unwrap().claims().to_owned();
 
     let checkout_session: CheckoutSession = stripe_handler.create_stripe_checkout_session(

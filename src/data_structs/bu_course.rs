@@ -74,8 +74,8 @@ impl BUCourse {
             college: row.try_get("college")?,
             department: row.try_get("department")?,
             course_code: row.try_get("course_code")?,
-            title: None,
-            credits: None,
+            title: row.try_get("title")?,
+            credits: row.try_get("credits")?,
         })
     }
 

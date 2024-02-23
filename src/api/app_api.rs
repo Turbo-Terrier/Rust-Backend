@@ -75,7 +75,7 @@ pub async fn app_start(data: web::Data<SharedResources>, req: HttpRequest, paylo
         None => UserApplicationSettings::default()
     };
     // create session
-    let session_id = data.database.create_session(&start_data, &kerberos_username, &grant_type).await;
+    let session_id = data.database.create_session(&start_data, &kerberos_username, &grant_type, !settings.real_registrations).await;
 
     let response = ApplicationStartPermission::new(
         kerberos_username,
