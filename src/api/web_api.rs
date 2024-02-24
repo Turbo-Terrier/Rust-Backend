@@ -178,8 +178,8 @@ pub async fn add_custom_course(data: web::Data<SharedResources>, req: HttpReques
     }
 
     let added_course = database.add_course(
-        &course.course.semester,
-        course.course.to_full_course_code_str().as_str(),
+        course.course.semester.clone(),
+        course.course.to_full_course_code_str(),
         None, None, false, vec![
             CourseSection {
                 section: course.section.section,

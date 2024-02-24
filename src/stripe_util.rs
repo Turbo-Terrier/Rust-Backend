@@ -113,7 +113,8 @@ impl StripeHandler {
 
         let redirect_url_success = format!("{}/dashboard?payment_status=success", base_url);
         let redirect_url_failure = format!("{}/dashboard", base_url);
-        let mut checkout_session = CreateCheckoutSession::new(redirect_url_success.as_str());
+        let mut checkout_session = CreateCheckoutSession::new();
+        checkout_session.success_url = Option::from(redirect_url_success.as_str());
         checkout_session.cancel_url = Option::from(redirect_url_failure.as_str());
         checkout_session.customer = Option::from(customer);
         checkout_session.line_items = Option::from(

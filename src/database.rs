@@ -597,7 +597,7 @@ impl DatabasePool {
             .expect("Error executing the create_or_update_user_application_settings query");
     }
 
-    pub async fn add_custom_course_and_section(&self, semester: &Semester, course_code: &str, section: &str) -> BUCourseSection {
+    pub async fn add_custom_course_and_section(&self, semester: Semester, course_code: String, section: &str) -> BUCourseSection {
         let course_section = CourseSection {
             section: section.to_string(),
             ..CourseSection::default()
@@ -686,9 +686,9 @@ impl DatabasePool {
     }
 
     // course added by the scrapper are "confirmed to exist"
-    pub async fn add_course(&self, semester: &Semester, course_code: &str, course_title: Option<String>, credits: Option<u8>, existence_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
+    pub async fn add_course(&self, semester: Semester, course_code: String, course_title: Option<String>, credits: Option<u8>, existence_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
         println!("ADDING {} - {:?} | {:?}", course_code, course_title, &sections);
-        let (college, department, code) = BUCourse::from_course_code_str(course_code);
+        let (college, department, code) = BUCourse::from_course_code_str(&course_code);
 
         let result = sqlx::query(r#"
             INSERT INTO course_catalog

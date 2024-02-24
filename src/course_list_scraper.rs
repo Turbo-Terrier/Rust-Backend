@@ -1,8 +1,5 @@
-use std::fmt::format;
 use regex::Regex;
-use reqwest::Response;
-use scraper::{CaseSensitivity, Element, ElementRef, Selector};
-use scraper::selector::CssLocalName;
+use scraper::{Element, ElementRef, Selector};
 
 use crate::data_structs::bu_course::CourseSection;
 use crate::data_structs::semester::{Semester, SemesterSeason};
@@ -42,6 +39,12 @@ async fn get_summer_sites_for_department(database: &DatabasePool, summer_session
     let result = reqwest::get(BU_URL.to_owned() + url.as_str()).await;
 
     println!("{}", BU_URL.to_owned() + url.as_str());
+    let semester = Semester {
+        semester_season: if summer_session == "SUM1" {SemesterSeason::Summer1} else {SemesterSeason::Summer2},
+        semester_year: 2024, //todo
+    };
+
+    let mut db_futures = Vec::new();
 
     if result.is_ok() {
         let result = result.unwrap();
@@ -104,14 +107,15 @@ async fn get_summer_sites_for_department(database: &DatabasePool, summer_session
                     };
                     course_sections_vec.push(course_section);
                 }
-
-                let semester = Semester {
-                    semester_season: if summer_session == "SUM1" {SemesterSeason::Summer1} else {SemesterSeason::Summer2},
-                    semester_year: 2024, //todo
-                };
-                database.add_course(&semester, course_code, Some(course_name.to_string()), credits, true, course_sections_vec).await;
+                let future = database.add_course(semester.clone(), course_code.to_string(), Some(course_name.to_string()), credits, true, course_sections_vec);
+                db_futures.push(future);
             }
         }
+
+        for future in db_futures {
+            future.await;
+        }
+
     } else {
         println!("Error getting summer courses for department={}", department);
     }
@@ -128,6 +132,7 @@ pub async fn get_sites(database: &DatabasePool) {
     let heading_course_desc_and_credit: Selector = Selector::parse("p").unwrap();
     let course_result_sections_link: Selector = Selector::parse("a.coursearch-result-sections-link").unwrap();
     let course_section_rows_selector: Selector = Selector::parse("tr[data-section].first-row").unwrap();
+    let mut course_vec = Vec::new();
 
     let result = reqwest::get(BU_URL.to_owned() + COURSE_CATALOG_URL).await;
     if result.is_ok() {
@@ -137,6 +142,7 @@ pub async fn get_sites(database: &DatabasePool) {
             let text_resp = text_resp.unwrap();
             let html_document = scraper::Html::parse_document(text_resp.as_str());
             let course_iter = html_document.select(&course_list_selector).into_iter();
+
             for course in course_iter {
                 let heading_div = course.select(&course_heading_div_select).next().unwrap();
                 let content_div = course.select(&course_description_div_select).next().unwrap();
@@ -152,33 +158,38 @@ pub async fn get_sites(database: &DatabasePool) {
                         .parse::<u8>().ok()
                 }).flatten();
 
-                let mut sections = Vec::new();
                 let opt_section_info = course.select(&course_result_sections_link).next();
                 if opt_section_info.is_some() {
                     let section_info_link_tag = opt_section_info.unwrap();
                     let section_info_url = section_info_link_tag.value().attr("href").unwrap();
-                    match reqwest::get(BU_URL.to_owned() + section_info_url).await {
-                        Ok(resp) => {
-                            let raw_sections_html = resp.text().await.unwrap();
-                            let sections_html_document = scraper::Html::parse_document(raw_sections_html.as_str());
-                            for a_row in sections_html_document.select(&course_section_rows_selector) {
-                                sections.push(process_section_row(a_row));
-                            }
-                        },
-                        Err(e) => {
-                            println!("Error getting section info for {}: {}", course_code, e);
-                        }
-                    };
+                    course_vec.push((course_code.to_string(), Some(course_name.to_string()), course_credits, section_info_url.to_string()));
                 }
-                // todo hard coded rn
-                let semester = Semester {
-                    semester_season: SemesterSeason::Spring,
-                    semester_year: 2024,
-                };
-                database.add_course(&semester, course_code, Some(course_name.to_string()), course_credits, true, sections).await;
             }
         }
     }
+
+    for (course_code, course_name, course_credits, section_info_url) in course_vec {
+        let mut sections = Vec::new();
+        match reqwest::get(BU_URL.to_owned() + section_info_url.as_str()).await {
+            Ok(resp) => {
+                let raw_sections_html = resp.text().await.unwrap();
+                let sections_html_document = scraper::Html::parse_document(raw_sections_html.as_str());
+                for a_row in sections_html_document.select(&course_section_rows_selector) {
+                    sections.push(process_section_row(a_row));
+                }
+            },
+            Err(e) => {
+                println!("Error getting section info for {}: {}", course_code, e);
+            }
+        };
+        // todo hard coded rn
+        let semester = Semester {
+            semester_season: SemesterSeason::Spring,
+            semester_year: 2024,
+        };
+        database.add_course(semester, course_code, course_name, course_credits, true, sections).await;
+    }
+
 }
 
 fn process_section_row(a_row: ElementRef) -> CourseSection {
