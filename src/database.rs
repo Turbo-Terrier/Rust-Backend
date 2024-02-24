@@ -686,8 +686,8 @@ impl DatabasePool {
     }
 
     // course added by the scrapper are "confirmed to exist"
+    // todo: make a global list of courses and use that to avoid database calls
     pub async fn add_course(&self, semester: Semester, course_code: String, course_title: Option<String>, credits: Option<u8>, existence_confirmed: bool, sections: Vec<CourseSection>) -> Vec<BUCourseSection> {
-        println!("ADDING {} - {:?} | {:?}", course_code, course_title, &sections);
         let (college, department, code) = BUCourse::from_course_code_str(&course_code);
 
         let result = sqlx::query(r#"
@@ -708,6 +708,9 @@ impl DatabasePool {
             .execute(&self.pool).await
             .expect("Error executing the add_course query");
 
+        // get if any new keys were added
+        let inserted = result.last_insert_id() != 0;
+
         // retrieve insert (or updated) id todo make unsigned
         let course_id: u32 = sqlx::query_scalar(r#"
                 SELECT course_id FROM course_catalog WHERE semester_season=? AND semester_year=? AND college=? AND department=? AND course_code=?;
@@ -721,7 +724,7 @@ impl DatabasePool {
             .expect("Error retrieving last insert id");
 
         for section in &sections {
-            sqlx::query(r#"
+            let result2 = sqlx::query(r#"
                 INSERT INTO course_sections_catalog
                 (course_id, course_section, open_seats, instructor, section_type, location, schedule, dates, notes, section_existence, added_timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE
@@ -741,6 +744,13 @@ impl DatabasePool {
                 .bind(&chrono::Local::now().timestamp())
                 .execute(&self.pool).await
                 .expect("Error executing the add_course query");
+
+            // check if a new section was inserted
+            let inserted2 = result2.last_insert_id() != 0;
+            if inserted2 {
+                println!("ADDING NEW SECTION {} - {:?} | {:?}", course_code, course_title, &section);
+            }
+
         }
 
         let mut bu_course_sections: Vec<BUCourseSection> = Vec::new();

@@ -183,11 +183,11 @@ async fn main() -> std::io::Result<()> {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(60 * 60 * 3)); //3 hrs
         loop {
-            let cleanup_start_time = Instant::now();
+            let course_find_task = Instant::now();
             course_list_scraper::get_sites(&copied_resource_2.database).await;
             // todo: order matters here
             course_list_scraper::get_summer_courses(&copied_resource_2.database).await;
-            let task_time = cleanup_start_time.elapsed().as_millis();
+            let _ = course_find_task.elapsed().as_millis();
             interval.tick().await;
         }
     });
