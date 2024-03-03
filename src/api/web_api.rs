@@ -352,7 +352,7 @@ pub async fn get_active_semesters(data: web::Data<SharedResources>, req: HttpReq
         return HttpResponse::Unauthorized().json("Invalid");
     }
 
-    let semesters = Semester::get_current_and_upcoming_semesters();
+    let semesters = database.get_active_semesters().await;
 
     return HttpResponse::Ok()
         .json(semesters);

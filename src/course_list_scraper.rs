@@ -1,3 +1,4 @@
+use chrono::{Datelike, TimeZone};
 use regex::Regex;
 use scraper::{Element, ElementRef, Selector};
 
@@ -6,10 +7,8 @@ use crate::data_structs::semester::{Semester, SemesterSeason};
 use crate::database::DatabasePool;
 
 const BU_URL: &str = "https://www.bu.edu";
-// TODO: catalog hard coded for now
-const COURSE_CATALOG_URL: &str = "/phpbin/course-search/search.php?page=w0&pagesize=100000&yearsem_adv=2024-SPRG";
 
-pub async fn get_summer_courses(database: &DatabasePool) {
+pub async fn discover_summer_courses(database: &DatabasePool) {
     // todo get depts from here: https://www.bu.edu/summer/registration/course-codes-numbers/
     let departments = database.get_all_course_departments().await;
     for department in departments {
@@ -38,10 +37,10 @@ async fn get_summer_sites_for_department(database: &DatabasePool, summer_session
 
     let result = reqwest::get(BU_URL.to_owned() + url.as_str()).await;
 
-    println!("{}", BU_URL.to_owned() + url.as_str());
+    let current_dt = chrono_tz::America::New_York.from_local_datetime(&chrono::Local::now().naive_local()).unwrap();
     let semester = Semester {
         semester_season: if summer_session == "SUM1" {SemesterSeason::Summer1} else {SemesterSeason::Summer2},
-        semester_year: 2024, //todo
+        semester_year: current_dt.year() as u16, //todo: not very reliable to depend on current year
     };
 
     let mut db_futures = Vec::new();
@@ -122,7 +121,47 @@ async fn get_summer_sites_for_department(database: &DatabasePool, summer_session
 
 }
 
-pub async fn get_sites(database: &DatabasePool) {
+pub async fn discover_regular_semesters(database: &DatabasePool) {
+
+    let entry_url = "/phpbin/course-search/search.php?page=w0&pagesize=1&adv=1&nolog=&search_adv_all=&yearsem_adv=*&credits=*&pathway=social&hub_match=all";
+
+    let drop_down_selector: Selector = Selector::parse("select.coursearch-searchfields-semester-select").unwrap();
+
+    let result = reqwest::get(BU_URL.to_owned() + entry_url).await;
+
+    let mut target_sems: Vec<String> = Vec::new();
+    if result.is_ok() {
+        let result = result.unwrap();
+        let text_resp = result.text().await;
+        if text_resp.is_ok() {
+            let text_resp = text_resp.unwrap();
+            let html_document = scraper::Html::parse_document(text_resp.as_str());
+            let drop_down_selection = html_document.select(&drop_down_selector).next().unwrap();
+            for drop_down_item in drop_down_selection.children() {
+                if !drop_down_item.value().is_element() {
+                    continue;
+                }
+                // select the value attribute for the element
+                let drop_down_entries = drop_down_item.value().as_element().unwrap().attr("value").unwrap();
+                // * refers to figure semester - we don't want that, we want a current semester
+                // and SUMM refers to summer session; gives incomplete info, we handle that elsewhere
+                if drop_down_entries.eq("*") || drop_down_entries.contains("SUMM") {
+                    continue;
+                }
+                target_sems.push(drop_down_entries.to_string());
+            }
+        }
+    }
+
+    for target_sem in target_sems {
+        discover_semester_courses(&database, &target_sem).await;
+    }
+
+}
+
+pub async fn discover_semester_courses(database: &DatabasePool, semester_key: &String) {
+
+    let course_catalog_url: String = format!("/phpbin/course-search/search.php?page=w0&pagesize=100000&yearsem_adv={}", semester_key);
 
     let course_list_selector: Selector = Selector::parse("li.coursearch-result").unwrap();
     let course_heading_div_select: Selector = Selector::parse("div.coursearch-result-heading").unwrap();
@@ -134,7 +173,7 @@ pub async fn get_sites(database: &DatabasePool) {
     let course_section_rows_selector: Selector = Selector::parse("tr[data-section].first-row").unwrap();
     let mut course_vec = Vec::new();
 
-    let result = reqwest::get(BU_URL.to_owned() + COURSE_CATALOG_URL).await;
+    let result = reqwest::get(BU_URL.to_owned() + &course_catalog_url).await;
     if result.is_ok() {
         let result = result.unwrap();
         let text_resp = result.text().await;
@@ -182,11 +221,7 @@ pub async fn get_sites(database: &DatabasePool) {
                 println!("Error getting section info for {}: {}", course_code, e);
             }
         };
-        // todo hard coded rn
-        let semester = Semester {
-            semester_season: SemesterSeason::Spring,
-            semester_year: 2024,
-        };
+        let semester = Semester::from_course_catalog_key(semester_key);
         database.add_course(semester, course_code, course_name, course_credits, true, sections).await;
     }
 

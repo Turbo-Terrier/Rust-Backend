@@ -98,69 +98,19 @@ impl Semester {
         return NaiveDate::from_ymd(self.semester_year as i32, end_date.month, end_date.day);
     }
 
-    /*pub async fn get_current_semesters() -> Vec<Semester> {
-        // queries and parses the html for https://www.bu.edu/reg/calendars/semester/ to get the current semesters
-        // using scraper as the html parser
-        let page_html_raw = reqwest::get("https://www.bu.edu/reg/calendars/semester/")
-            .await.unwrap().text().await.unwrap();
-        let page_html = scraper::Html::parse_document(page_html_raw.as_str());
-        let semester_selector = Selector::parse("div.bu_collapsible_container").unwrap();
-        let results = page_html.select(&semester_selector);
-        let mut current_semesters: Vec<Semester> = Vec::new();
-        for result in results {
-            let semester_name_selector = Selector::parse("h3.bu_collapsible").unwrap();
-            let semester_name = result.select(&semester_name_selector).next().unwrap().text().next().unwrap();
-            let event_row_selector = Selector::parse("tr").unwrap();
-            let event_rows = result.select(&event_row_selector);
-            // if the data listed in the last row is either today or in the future, then it is the current semester
-            let mut is_not_past_semester = false;
-            let current_semester = Semester::from_string(semester_name);
-            for event_row in event_rows {
-                let event_date_selector = Selector::parse("th").unwrap();
-                let mut event_date = {
-                    let html_txt = event_row.select(&event_date_selector).next().unwrap().text();
-                    let joined_str = html_txt.collect::<Vec<_>>().join("");
-                    joined_str.as_str().trim().to_string()
-                };
-                let formatted_event_date = {
-                    // possible formats:
-                    // MM DD - MM DD, YYYY
-                    // MM DD - MM DD YYYY
-                    // MM DD - DD, YYYY
-                    // MM DD - DD YYYY
-                    // MM DD - MM DD
-                    // MM DD - DD
-                    // MM DD, YYYY
-                    // MM DD YYYY
-                    // MM DD
-                    let event_date_vec = event_date.replace(",", "");
-                    let event_date_vec = event_date_vec.split(" ").collect::<Vec<&str>>();
-                    if event_date_vec.len() < 2 {
-                        println!("Error parsing date: {:#?}", &event_date); // BU is inconsistent so can happen
-                        continue;
-                    }
-                    event_date_vec[0].to_owned() + " " + event_date_vec[1] + " " + current_semester.semester_year.to_string().as_str()
-                };
-                // dates are in this format: MM DD YYYY
-                let event_date = match chrono::NaiveDate::parse_from_str(&formatted_event_date, "%B %d %Y") {
-                    Ok(date) => date,
-                    Err(e) => {
-                        println!("Error parsing date: {:#?}", &formatted_event_date); // BU is inconsistent so can happen
-                        continue;
-                    }
-                };
-                // compare to America/New_York time using chrono_tz
-                let current_date = chrono_tz::America::New_York.from_local_datetime(&chrono::Local::now().naive_local()).unwrap();
-                if event_date >= current_date.date_naive() {
-                    is_not_past_semester = true;
-                    current_semesters.push(current_semester.clone());
-                    break;
-                }
-            }
+    pub fn from_course_catalog_key(cc_key: &String) -> Semester {
+        let parts = cc_key.split("-").collect::<Vec<&str>>();
+        let year = parts[0].parse::<u16>().unwrap();
+        let season = match parts[1] {
+            "FALL" => SemesterSeason::Fall,
+            "SPRG" => SemesterSeason::Spring,
+            _ => panic!("Invalid season in course catalog semester key.")
+        };
+        return Semester {
+            semester_season: season,
+            semester_year: year
         }
-
-        return current_semesters;
-    }*/
+    }
 
     pub fn get_next_semester(&self) -> Semester {
         let mut next_year = self.semester_year;

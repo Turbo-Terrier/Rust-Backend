@@ -5,6 +5,7 @@ use rand::Rng;
 use sqlx::{Error, Executor, MySql, Pool, Row};
 use sqlx::mysql::{MySqlPoolOptions, MySqlQueryResult, MySqlRow};
 
+use std::str::FromStr;
 use crate::data_structs::app_config::UserApplicationSettings;
 use crate::data_structs::bu_course::{BUCourse, BUCourseSection};
 use crate::data_structs::bu_course::CourseSection;
@@ -660,6 +661,30 @@ impl DatabasePool {
                 }
             }
             return courses;
+        }
+    }
+
+
+    /**
+        Gets active semesters based on courses in the db (which were scraped from bu)
+    */
+    pub async fn get_active_semesters(&self) -> Vec<Semester> {
+        let result = sqlx::query("SELECT DISTINCT semester_season, semester_year from course_catalog")
+            .fetch_all(&self.pool).await
+            .expect("Error fetching rows for the get_active_semesters query");
+        if result.is_empty() {
+            return Vec::new();
+        } else {
+            let mut semesters = Vec::new();
+            for row in result {
+                let semester_season = row.get_unchecked::<String, &str>("semester_season");
+                let semester_year = row.get_unchecked::<u16, &str>("semester_year");
+                semesters.push(Semester {
+                    semester_season: SemesterSeason::from_str(&semester_season).unwrap(),
+                    semester_year: semester_year
+                });
+            }
+            return semesters;
         }
     }
 
