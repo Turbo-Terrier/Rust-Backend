@@ -45,7 +45,7 @@ pub struct Semester {
 impl Semester {
 
     /// Get the ongoing semester and all semesters which will start with in the next 8 months
-    pub fn get_current_and_upcoming_semesters() -> Vec<Semester> { //todo: update with approx registration instead
+    pub fn get_current_and_upcoming_semesters() -> Vec<Semester> {
         // uses the current date to determine ongoing and upcoming semesters whose start is with in the next 8 months
         let current_date = chrono_tz::America::New_York.from_local_datetime(&chrono::Local::now().naive_local()).unwrap();
         let future_date = current_date.add(chrono::Duration::days(7 * 30));

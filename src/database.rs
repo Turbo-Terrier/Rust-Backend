@@ -666,9 +666,9 @@ impl DatabasePool {
 
 
     /**
-        Gets active semesters based on courses in the db (which were scraped from bu)
+        Gets semesters based on courses in the db (which were scraped from bu)
     */
-    pub async fn get_active_semesters(&self) -> Vec<Semester> {
+    pub async fn get_semesters_in_db(&self) -> Vec<Semester> {
         let result = sqlx::query("SELECT DISTINCT semester_season, semester_year from course_catalog")
             .fetch_all(&self.pool).await
             .expect("Error fetching rows for the get_active_semesters query");

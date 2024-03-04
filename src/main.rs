@@ -176,16 +176,13 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    // MUST get normal courses before summer courses TODO: better way of getting summer depts
-    //course_list_scraper::get_sites(&copied_resource_2.database).await;
-    // course_list_scraper::get_summer_courses(&copied_resource_2.database).await;
     println!("Starting course scraping task");
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(60 * 60 * 3)); //3 hrs
         loop {
             let course_find_task = Instant::now();
             course_list_scraper::discover_regular_semesters(&copied_resource_2.database).await;
-            // todo: order matters here
+            // todo: order matters here since summer courses search based on departments already in db
             course_list_scraper::discover_summer_courses(&copied_resource_2.database).await;
             let _ = course_find_task.elapsed().as_millis();
             interval.tick().await;
